@@ -74,7 +74,10 @@ required:
      transactions on). The testnet default is the `/api/rpc` proxy; set an
      absolute URL here only when hosting somewhere without it.
    - `VITE_POOL_ADDRESS_31337` / `VITE_POOL_ADDRESS_11155111` — default pool
-     addresses, used as a fallback when nothing is saved in `localStorage` yet.
+     addresses, used when nothing is saved in `localStorage` yet. Sepolia already
+     has the live deployment committed in `src/constants/contracts.ts`, so this
+     var is only needed to point at a _different_ pool; local Anvil has no
+     committed default because its address depends on your deployer's nonce.
 
 To point at a different testnet entirely (e.g. Base Sepolia, Arbitrum Sepolia),
 add another `defineChain(...)` entry to `supportedChains` in
@@ -110,7 +113,9 @@ Vercel's model. Import the repo and set:
 2. **Environment variables**:
    - `NOWNODES_API_KEY` — server-side only, read by `api/rpc.ts`. Optional; the
      proxy falls back to a public Sepolia endpoint without it.
-   - `VITE_POOL_ADDRESS_11155111` — the Sepolia `NDimPool` address.
+   - `VITE_POOL_ADDRESS_11155111` — optional. The live Sepolia pool is committed
+     in `src/constants/contracts.ts`, so a deploy works without it; set it only
+     to point the deployment at a different pool.
 
 `vercel.json` rewrites every non-`/api/*` path to `index.html` so deep links
 like `/swap` and `/liquidity` survive a refresh (the app uses `BrowserRouter`).

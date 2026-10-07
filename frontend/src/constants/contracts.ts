@@ -204,13 +204,32 @@ export const ERC20_ABI = [
   },
 ] as const;
 
-// Default NDimPool address per chain id, read from Vite env vars. Falls back to
-// whatever the user has saved in the pool config store (see store/usePoolConfigStore.ts)
-// when unset, so no rebuild is required to point at a freshly-deployed pool.
 import type { Address } from "viem";
 import { localAnvil, sepoliaTestnet } from "./chains";
 
+/// The live Sepolia deployment (see the root README). Committed rather than left to
+/// `VITE_POOL_ADDRESS_11155111` so a fresh clone and the Vercel build both reach a working pool
+/// with no env setup. Local Anvil has no committed default: its address depends on the deployer's
+/// nonce on that machine, so it comes from the env var or the in-app field.
+export const SEPOLIA_POOL_ADDRESS: Address = "0xD83e212B89b622400aa1a0e360E5cBd2d4920711";
+
+/// Deployments that must not be traded against any more. The pre-fix Sepolia pool ran the
+/// origin-centred invariant, whose quotes improved with trade size and let the first arbitrageur
+/// drain it (docs/DESIGN.md section 2a). A saved override pointing at one of these is discarded
+/// on load -- see store/usePoolConfigStore.ts.
+export const SUPERSEDED_POOL_ADDRESSES: readonly Address[] = ["0xb55Dc1fa2ACfB4e1C0CBC46C77E941f76775B92b"];
+
+export function isSupersededPool(address: Address | undefined): boolean {
+  if (!address) return false;
+  return SUPERSEDED_POOL_ADDRESSES.some((a) => a.toLowerCase() === address.toLowerCase());
+}
+
+// Default NDimPool address per chain id: the `VITE_POOL_ADDRESS_*` env var if set, otherwise the
+// committed deployment above. A user override saved in the pool config store
+// (store/usePoolConfigStore.ts) takes precedence over both, so pointing the app at a
+// freshly-deployed pool never needs a rebuild.
 export const DEFAULT_POOL_ADDRESSES: Record<number, Address | undefined> = {
   [localAnvil.id]: (import.meta.env.VITE_POOL_ADDRESS_31337 as Address | undefined) || undefined,
-  [sepoliaTestnet.id]: (import.meta.env.VITE_POOL_ADDRESS_11155111 as Address | undefined) || undefined,
+  [sepoliaTestnet.id]:
+    (import.meta.env.VITE_POOL_ADDRESS_11155111 as Address | undefined) || SEPOLIA_POOL_ADDRESS,
 };
