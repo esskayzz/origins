@@ -10,7 +10,7 @@ import { chainAssets, wagmiConfig } from "./services/wagmiConfig";
 
 const queryClient = new QueryClient();
 
-// Ant Design Pro's signature blue, see design/AntDesign Pro 4.0.sketch for the reference kit.
+// Ant Design Pro's signature blue (per the Ant Design Pro 4.0 reference UI kit).
 const theme = {
   token: {
     colorPrimary: "#1890ff",

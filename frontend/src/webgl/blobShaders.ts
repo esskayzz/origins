@@ -2,7 +2,8 @@
 // https://github.com/codrops/WebGLBlobs (an IcosahedronGeometry displaced by 3D Perlin noise
 // along its normals, with a sine-driven twist and a cosine colour palette in the fragment shader).
 
-// Classic 3D Perlin noise, Stefan Gustavson / Ashima Arts (MIT licensed).
+// Periodic 3D Perlin noise, Stefan Gustavson / Ashima Arts (MIT licensed) -- the inline
+// equivalent of glslify's `require(glsl-noise/periodic/3d)`. `rep` is the tiling period per axis.
 const NOISE_GLSL = /* glsl */ `
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -10,9 +11,9 @@ vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
 vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
 vec3 fade(vec3 t) { return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); }
 
-float cnoise(vec3 P) {
-  vec3 Pi0 = floor(P);
-  vec3 Pi1 = Pi0 + vec3(1.0);
+float pnoise(vec3 P, vec3 rep) {
+  vec3 Pi0 = mod(floor(P), rep);
+  vec3 Pi1 = mod(Pi0 + vec3(1.0), rep);
   Pi0 = mod289(Pi0);
   Pi1 = mod289(Pi1);
   vec3 Pf0 = fract(P);
@@ -72,10 +73,11 @@ float cnoise(vec3 P) {
   return 2.2 * n_xyz;
 }
 
+// Inline equivalent of glslify's require(glsl-rotate/rotateY): same matrix layout as that package.
 vec3 rotateY(vec3 v, float angle) {
   float s = sin(angle);
   float c = cos(angle);
-  mat3 m = mat3(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c);
+  mat3 m = mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c);
   return m * v;
 }
 `;
@@ -86,24 +88,32 @@ varying float vDistort;
 
 uniform float uTime;
 uniform float uSpeed;
-uniform float uNoiseStrength;
 uniform float uNoiseDensity;
-uniform float uFreq;
-uniform float uAmp;
+uniform float uNoiseStrength;
+uniform float uFrequency;
+uniform float uAmplitude;
 
 ${NOISE_GLSL}
 
 void main() {
-  vUv = uv;
-
   float t = uTime * uSpeed;
-  float distortion = cnoise((normal + t) * uNoiseDensity) * uNoiseStrength;
-  vec3 pos = position + normal * distortion;
 
-  float angle = sin(uv.y * uFreq + t) * uAmp;
+  // Periodic Perlin noise sampled on the (time-shifted) normal; density scales the tiling period.
+  float distortion = pnoise((normal + t), vec3(10.0) * uNoiseDensity) * uNoiseStrength;
+
+  // Disturb each vertex along the direction of its normal.
+  vec3 pos = position + (normal * distortion);
+
+  // Twist: a sine wave from top to bottom of the sphere drives a per-vertex rotation about Y.
+  // uFrequency sets how many waves span the sphere, uAmplitude how far each one twists.
+  float angle = sin(uv.y * uFrequency + t) * uAmplitude;
   pos = rotateY(pos, angle);
 
+  // Only what the fragment shader reads: an unread varying (e.g. vNormal) draws a WebGL
+  // "output of vertex shader not read" warning on every page load.
+  vUv = uv;
   vDistort = distortion;
+
   gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
 }
 `;
@@ -111,7 +121,7 @@ void main() {
 // Cosine colour palette, per the "Cospalette" section of
 // https://tympanus.net/codrops/2021/01/26/twisted-colorful-spheres-with-three-js/
 // (Inigo Quilez's palette function: https://iquilezles.org/www/articles/palettes/palettes.htm),
-// using the article's own "favourite combination" of brightness/contrast/oscillation/phase.
+// with our own blue/green coefficients -- see the comment block in main().
 export const BLOB_FRAGMENT_SHADER = /* glsl */ `
 varying vec2 vUv;
 varying float vDistort;
@@ -126,10 +136,17 @@ vec3 cosPalette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 void main() {
   float distort = vDistort * uIntensity;
 
-  vec3 brightness = vec3(0.5, 0.5, 0.5);
-  vec3 contrast = vec3(0.5, 0.5, 0.5);
+  // Blue <-> green palette, green and blue half a cycle apart so the surface sweeps green ->
+  // teal -> blue and back.
+  //  - Red rides in phase with green (0..0.24): at the green peak it warms the dark green toward
+  //    a yellow-green, and at the blue peak it is ~0 so the blue carries no purple cast.
+  //  - Green's floor is raised (~0.26..0.58) so the blue end still contains some green, which
+  //    is what reads as cobalt (#0047AB ~ rgb(0, 0.28, 0.67)) rather than violet.
+  //  - Blue tops out ~0.85 instead of 1.0, again closer to cobalt than to pure RGB blue.
+  vec3 brightness = vec3(0.02, 0.50, 0.50);
+  vec3 contrast = vec3(0.12, 0.40, 0.45);
   vec3 oscilation = vec3(1.0, 1.0, 1.0);
-  vec3 phase = vec3(0.0, 0.1, 0.2);
+  vec3 phase = vec3(0.0, 0.0, 0.5);
 
   vec3 color = cosPalette(distort, brightness, contrast, oscilation, phase);
 

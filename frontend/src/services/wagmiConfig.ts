@@ -9,6 +9,10 @@ import {
   supportedChains,
 } from "../constants/chains";
 
+/** Sepolia transport. Defaults to the same-origin `/api/rpc` proxy (see server/rpcProxy.ts),
+ * which the browser resolves against the page origin; any provider key stays server-side. */
+export const testnetTransport = () => http(TESTNET_RPC_URL);
+
 // The Ant Design Web3 adapter's `MetaMask()` wallet factory (see main.tsx) looks up a wagmi
 // connector literally named "MetaMask" in `config.connectors` -- it does NOT create one on its
 // own -- so it must be registered here directly rather than relying solely on wagmi's
@@ -19,7 +23,7 @@ export const wagmiConfig = createConfig({
   connectors: [metaMask()],
   transports: {
     [localAnvil.id]: http(LOCAL_RPC_URL),
-    [sepoliaTestnet.id]: http(TESTNET_RPC_URL),
+    [sepoliaTestnet.id]: testnetTransport(),
   },
 });
 

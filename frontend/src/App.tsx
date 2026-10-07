@@ -23,7 +23,7 @@ export default function App() {
   return (
     <Layout className="app-layout">
       <Sider breakpoint="lg" collapsedWidth="0">
-        <div className="logo">Hypersphere</div>
+        <div className="logo wordmark">Hypersphere</div>
         <Menu
           theme="dark"
           mode="inline"

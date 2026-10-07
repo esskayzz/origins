@@ -26,18 +26,21 @@ export function HypersphereBlob() {
       vertexShader: BLOB_VERTEX_SHADER,
       fragmentShader: BLOB_FRAGMENT_SHADER,
       transparent: true,
+      // Twist/noise defaults follow the Codrops "twisted colorful spheres" demo this shader is
+      // adapted from; uAmplitude is the one that makes the twist read as a twist.
       uniforms: {
         uTime: { value: 0 },
-        uSpeed: { value: 0.25 },
-        uNoiseDensity: { value: 0.9 },
-        uNoiseStrength: { value: 0.3 },
-        uFreq: { value: 2.0 },
-        uAmp: { value: 0.6 },
+        uSpeed: { value: 0.2 },
+        uNoiseDensity: { value: 1.5 },
+        uNoiseStrength: { value: 0.2 },
+        uFrequency: { value: 3.0 },
+        uAmplitude: { value: 6.0 },
         uIntensity: { value: 4.0 },
         uAlpha: { value: 1.0 },
       },
     });
     const mesh = new THREE.Mesh(geometry, material);
+    mesh.scale.setScalar(1.5);
     scene.add(mesh);
 
     const startTime = performance.now();

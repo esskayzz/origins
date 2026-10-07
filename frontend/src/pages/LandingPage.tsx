@@ -11,7 +11,7 @@ export function LandingPage() {
     <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm, token: { colorPrimary: "#1890ff" } }}>
       <div className="landing-page">
         <header className="landing-header">
-          <Typography.Title level={3} className="landing-logo">
+          <Typography.Title level={3} className="landing-logo wordmark">
             Hypersphere
           </Typography.Title>
           <ConnectWallet />
