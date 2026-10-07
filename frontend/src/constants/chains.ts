@@ -38,6 +38,10 @@ export const sepoliaTestnet = defineChain({
   // The app's own transport (wagmiConfig.ts) is what uses TESTNET_RPC_URL.
   rpcUrls: { default: { http: [PUBLIC_TESTNET_RPC_URL] } },
   blockExplorers: { default: { name: "Etherscan", url: "https://sepolia.etherscan.io" } },
+  // Same Multicall3 deployment viem's own `sepolia` definition uses. Without it wagmi's
+  // `useReadContracts` falls back to one eth_call per item, and the pool pages' ~20 parallel
+  // reads trip NOWNodes' free-tier per-second limit (HTTP 429 -> "HTTP request failed").
+  contracts: { multicall3: { address: "0xca11bde05977b3631167028862be2a173976ca11", blockCreated: 751532 } },
   testnet: true,
 });
 
