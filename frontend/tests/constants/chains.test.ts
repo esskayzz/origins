@@ -27,4 +27,13 @@ describe("testnet RPC selection", () => {
     expect(chains.sepoliaTestnet.rpcUrls.default.http[0]).toBe(chains.PUBLIC_TESTNET_RPC_URL);
     expect(chains.sepoliaTestnet.rpcUrls.default.http[0]).toMatch(/^https:\/\//);
   });
+
+  // Regression test for: without a multicall3 entry, `useReadContracts` issued one eth_call per
+  // token/metadata item and the burst was rate-limited (HTTP 429) by the free NOWNodes tier.
+  test("Sepolia registers Multicall3 so multi-reads aggregate into one eth_call", async () => {
+    const chains = await loadChains();
+    expect(chains.sepoliaTestnet.contracts?.multicall3?.address).toBe(
+      "0xca11bde05977b3631167028862be2a173976ca11",
+    );
+  });
 });
