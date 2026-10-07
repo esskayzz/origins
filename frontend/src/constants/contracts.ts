@@ -88,6 +88,23 @@ export const NDIM_POOL_ABI = [
   },
   {
     type: "function",
+    name: "previewMint",
+    stateMutability: "view",
+    inputs: [
+      { type: "uint8", name: "i" },
+      { type: "uint8", name: "j" },
+      { type: "int24", name: "tickLower" },
+      { type: "int24", name: "tickUpper" },
+      { type: "uint128", name: "liquidityDelta" },
+    ],
+    outputs: [
+      { type: "uint256", name: "amountI" },
+      { type: "uint256", name: "amountJ" },
+      { type: "bool", name: "inRange" },
+    ],
+  },
+  {
+    type: "function",
     name: "mint",
     stateMutability: "nonpayable",
     inputs: [

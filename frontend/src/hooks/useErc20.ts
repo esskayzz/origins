@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import type { Address } from "viem";
 import { maxUint256 } from "viem";
@@ -24,6 +25,16 @@ export function useErc20(tokenAddress: Address | undefined, spender: Address | u
 
   const { writeContract, data: txHash, isPending } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+
+  // Without this, a confirmed approve()/mintFaucet() left `allowance`/`balance` stale until some
+  // unrelated refetch (e.g. window refocus) happened to fire, which could make the UI keep
+  // asking to "Approve" after an approval already landed, or hide a just-minted faucet balance.
+  useEffect(() => {
+    if (!isSuccess) return;
+    void refetchBalance();
+    void refetchAllowance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuccess]);
 
   const approve = (amount: bigint = maxUint256) => {
     if (!tokenAddress || !spender) return;

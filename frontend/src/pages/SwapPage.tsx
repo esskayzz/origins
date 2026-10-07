@@ -8,6 +8,7 @@ import { usePoolTokens } from "../hooks/usePoolTokens";
 import type { PoolToken } from "../types/pool";
 import { useErc20 } from "../hooks/useErc20";
 import { NDIM_POOL_ABI } from "../constants/contracts";
+import { FaucetButton } from "../components/common/FaucetButton";
 
 export function SwapPage() {
   const { poolAddress } = usePoolAddress();
@@ -119,7 +120,12 @@ export function SwapPage() {
                 onClick={() => setAmountInText(formatUnits(balance, tokenIn.decimals))}
               >
                 Max
-              </Button>
+              </Button>{" "}
+              <FaucetButton
+                tokenAddress={tokenIn.address}
+                symbol={tokenIn.symbol}
+                decimals={tokenIn.decimals}
+              />
             </Typography.Text>
           )}
         </div>

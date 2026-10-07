@@ -126,6 +126,19 @@ contract NDimPool {
     // Mint / burn
     // ----------------------------------------------------------------------
 
+    /// @notice Read-only quote for `mint`/`burn`'s required/returned token amounts -- unlike
+    /// simulating `mint` itself, this never reverts for insufficient allowance/balance, so
+    /// callers can size an `approve()` before ever attempting the real call.
+    function previewMint(uint8 i, uint8 j, int24 tickLower, int24 tickUpper, uint128 liquidityDelta)
+        external
+        view
+        returns (uint256 amountI, uint256 amountJ, bool inRange)
+    {
+        _checkPair(i, j);
+        _checkTicks(tickLower, tickUpper);
+        return _amountsForRange(i, j, tickLower, tickUpper, liquidityDelta);
+    }
+
     function mint(address recipient, uint8 i, uint8 j, int24 tickLower, int24 tickUpper, uint128 liquidityDelta)
         external
         returns (uint256 amountI, uint256 amountJ)
