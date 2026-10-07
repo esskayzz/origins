@@ -117,6 +117,7 @@ export function SwapPage() {
           <Typography.Text type="secondary">From</Typography.Text>
           <Space.Compact style={{ width: "100%" }}>
             <Select
+              id="swap-token-in"
               value={tokenInIdx}
               onChange={setTokenInIdx}
               options={tokenOptions(tokenOutIdx)}
@@ -150,6 +151,7 @@ export function SwapPage() {
           <Typography.Text type="secondary">To (estimated)</Typography.Text>
           <Space.Compact style={{ width: "100%" }}>
             <Select
+              id="swap-token-out"
               value={tokenOutIdx}
               onChange={setTokenOutIdx}
               options={tokenOptions(tokenInIdx)}

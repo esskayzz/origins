@@ -150,54 +150,149 @@ describe.skipIf(!anvilUp || !POOL)("frontend against local anvil", () => {
   });
 
   beforeEach(async () => {
-    const [tka, tkb] = await Promise.all([tokenAt(0), tokenAt(1)]);
+    const [tka, tkb, tkc] = await Promise.all([tokenAt(0), tokenAt(1), tokenAt(2)]);
     await revokeAllowance(tka);
     await revokeAllowance(tkb);
+    await revokeAllowance(tkc);
   }, 30_000);
 
   afterEach(cleanup);
 
-  test("swap page: faucet -> approve -> quote -> swap TKA for TKB", SLOW, async () => {
-    const [tka, tkb] = await Promise.all([tokenAt(0), tokenAt(1)]);
-    const tkaBefore = await balanceOf(tka, ACCOUNT);
-    const tkbBefore = await balanceOf(tkb, ACCOUNT);
+  const SYMBOLS = ["TKA", "TKB", "TKC"] as const;
+  const ALL_PAIRS: [number, number][] = [
+    [0, 1],
+    [0, 2],
+    [1, 2],
+  ];
 
-    render(<SwapPage />, { wrapper: Providers });
+  /** Pick a token in one of the swap page's antd Selects (0 = "From", 1 = "To"). antd renders
+   * the option list into a body-level portal, so the open dropdown is located there. */
+  async function selectToken(which: 0 | 1, symbol: string) {
+    const combobox = screen.getAllByRole("combobox")[which];
+    fireEvent.mouseDown(combobox.closest(".ant-select-selector") as HTMLElement);
+    const option = await waitFor(() => {
+      // Both Selects keep their (hidden) dropdowns mounted once opened, so locate *this* one
+      // through the combobox's aria-controls listbox rather than "the visible dropdown". That
+      // relies on the page giving each Select its own `id` (rc-select otherwise uses one shared
+      // placeholder id under test, and the lookup lands on the other Select's dropdown).
+      const listbox = document.getElementById(combobox.getAttribute("aria-controls") ?? "");
+      const dropdown = listbox?.closest<HTMLElement>(".ant-select-dropdown");
+      const el = dropdown?.querySelector<HTMLElement>(`.ant-select-item-option[title="${symbol}"]`);
+      if (!el) throw new Error(`option ${symbol} is not in this Select's dropdown`);
+      return el;
+    }, WAIT);
+    expect(option.classList.contains("ant-select-item-option-disabled"), `${symbol} is disabled`).toBe(false);
+    fireEvent.click(option);
+    await waitFor(() => expect(shownSelections()[which]).toBe(symbol), WAIT);
+  }
 
-    // Pool metadata loads from chain: token selects default to TKA -> TKB.
-    await screen.findByText(/Balance:/, undefined, WAIT);
+  /** The symbols currently displayed in the From / To selects. */
+  const shownSelections = () =>
+    Array.from(document.querySelectorAll(".ant-select-selection-item")).map((el) => el.textContent);
 
-    // Faucet: a fresh wallet has no TKA.
-    fireEvent.click(buttonByText(screen, "Get 1000 TKA"));
-    const tkaFunded = tkaBefore + parseUnits("1000", 18);
-    await waitFor(async () => expect(await balanceOf(tka, ACCOUNT)).toBe(tkaFunded), WAIT);
-    // ...and the balance line refreshes without a manual reload.
-    await screen.findByText(`Balance: ${formatUnits(tkaFunded, 18)}`, { exact: false }, WAIT);
+  const flip = () => fireEvent.click(screen.getByTitle("Flip tokens"));
 
-    // Enter an amount; allowance is 0 so the primary action becomes "Approve TKA".
-    const amountInput = screen.getAllByPlaceholderText("0.0").find((el) => !el.hasAttribute("readonly"))!;
-    fireEvent.change(amountInput, { target: { value: "10" } });
-    fireEvent.click(await findButtonByText(screen, "Approve TKA"));
+  // Every ordered pair, reached from the page's default TKA -> TKB using only *enabled* Select
+  // options (the token on the other side is disabled) plus the Flip button.
+  const SWAP_ROUTES: { label: string; from: number; to: number; steps: () => Promise<void> }[] = [
+    { label: "TKA -> TKB", from: 0, to: 1, steps: async () => {} },
+    { label: "TKB -> TKA", from: 1, to: 0, steps: async () => flip() },
+    { label: "TKA -> TKC", from: 0, to: 2, steps: () => selectToken(1, "TKC") },
+    {
+      label: "TKC -> TKA",
+      from: 2,
+      to: 0,
+      steps: async () => {
+        await selectToken(1, "TKC");
+        flip();
+      },
+    },
+    {
+      label: "TKB -> TKC",
+      from: 1,
+      to: 2,
+      steps: async () => {
+        await selectToken(1, "TKC");
+        await selectToken(0, "TKB");
+      },
+    },
+    {
+      label: "TKC -> TKB",
+      from: 2,
+      to: 1,
+      steps: async () => {
+        await selectToken(1, "TKC");
+        await selectToken(0, "TKB");
+        flip();
+      },
+    },
+  ];
 
-    // Once the approval lands the allowance refetches, the swap is simulated and a quote shows.
-    const swapButton = await findButtonByText(screen, "Swap");
-    await waitFor(() => expect(swapButton).toBeEnabled(), WAIT);
-    const quoteInput = screen
-      .getAllByRole("textbox")
-      .find((el) => el.hasAttribute("readonly")) as HTMLInputElement;
-    const quoted = parseUnits(quoteInput.value, 18);
-    expect(quoted).toBeGreaterThan(0n);
-    // Output is strictly below the 10 TKA input: the 0.3% fee plus price impact. The pool's
-    // original origin-centred curve quoted *more* than the input here, which is why this
-    // assertion could not be made before (see docs/DESIGN.md section 2).
-    expect(quoted).toBeLessThan(parseUnits("10", 18));
+  test.each(SWAP_ROUTES)(
+    "swap page: faucet -> approve -> quote -> swap $label",
+    async ({ from, to, steps }) => {
+      const [tokenIn, tokenOut] = await Promise.all([tokenAt(from), tokenAt(to)]);
+      const inBefore = await balanceOf(tokenIn, ACCOUNT);
+      const outBefore = await balanceOf(tokenOut, ACCOUNT);
+      // Pre-trade spot price of `from` in `to` (WAD), the ceiling any quote may approach. The
+      // pool keys pair state by (lower, higher) index and `priceOf` does not reorder its
+      // arguments (it returns 0 for i > j), so the reverse direction is the reciprocal.
+      const [lo, hi] = from < to ? [from, to] : [to, from];
+      const priceLoInHi = await readContract(config, {
+        address: POOL!,
+        abi: NDIM_POOL_ABI,
+        functionName: "priceOf",
+        args: [lo, hi],
+      });
+      const WAD = 10n ** 18n;
+      const spot = from < to ? priceLoInHi : (WAD * WAD) / priceLoInHi;
 
-    fireEvent.click(swapButton);
-    await screen.findByText("Swap confirmed.", undefined, WAIT);
+      render(<SwapPage />, { wrapper: Providers });
 
-    expect(await balanceOf(tka, ACCOUNT)).toBe(tkaFunded - parseUnits("10", 18));
-    expect(await balanceOf(tkb, ACCOUNT)).toBe(tkbBefore + quoted);
-  });
+      // Pool metadata loads from chain: token selects default to TKA -> TKB.
+      await screen.findByText(/Balance:/, undefined, WAIT);
+      await steps();
+      await waitFor(() => expect(shownSelections()).toEqual([SYMBOLS[from], SYMBOLS[to]]), WAIT);
+      // The balance line follows the input side.
+      await screen.findByText(new RegExp(`^Balance: .* ${SYMBOLS[from]}`), undefined, WAIT);
+
+      // Faucet the input token (a fresh wallet holds none of them).
+      fireEvent.click(buttonByText(screen, `Get 1000 ${SYMBOLS[from]}`));
+      const funded = inBefore + parseUnits("1000", 18);
+      await waitFor(async () => expect(await balanceOf(tokenIn, ACCOUNT)).toBe(funded), WAIT);
+      // ...and the balance line refreshes without a manual reload.
+      await screen.findByText(`Balance: ${formatUnits(funded, 18)}`, { exact: false }, WAIT);
+
+      // Enter an amount; allowance is 0 so the primary action becomes "Approve <in>".
+      const amountInput = screen.getAllByPlaceholderText("0.0").find((el) => !el.hasAttribute("readonly"))!;
+      fireEvent.change(amountInput, { target: { value: "10" } });
+      fireEvent.click(await findButtonByText(screen, `Approve ${SYMBOLS[from]}`));
+
+      // Once the approval lands the allowance refetches, the swap is simulated and a quote shows.
+      const swapButton = await findButtonByText(screen, "Swap");
+      await waitFor(() => expect(swapButton).toBeEnabled(), WAIT);
+      const quoteInput = screen
+        .getAllByRole("textbox")
+        .find((el) => el.hasAttribute("readonly")) as HTMLInputElement;
+      const quoted = parseUnits(quoteInput.value, 18);
+      expect(quoted).toBeGreaterThan(0n);
+      // Never beats the pre-trade spot price (same invariant as test_SwapIsConvexAndNeverBeatsSpot
+      // in test/NDimPool.t.sol): the 0.3% fee plus price impact keep it strictly below. A fixed
+      // "less than the input" bound would be wrong here: earlier swaps move the price, so selling
+      // the token the pool is now short of legitimately pays out more than 1:1.
+      const amountIn = parseUnits("10", 18);
+      const spotCeiling = (amountIn * spot) / WAD;
+      expect(quoted, `quote ${quoted} vs spot ceiling ${spotCeiling}`).toBeLessThan(spotCeiling);
+      expect(screen.queryByText("Swap would revert")).toBeNull();
+
+      fireEvent.click(swapButton);
+      await screen.findByText("Swap confirmed.", undefined, WAIT);
+
+      expect(await balanceOf(tokenIn, ACCOUNT)).toBe(funded - amountIn);
+      expect(await balanceOf(tokenOut, ACCOUNT)).toBe(outBefore + quoted);
+    },
+    90_000,
+  );
 
   test("swap page: faucets cover every pool token, not just the input side", SLOW, async () => {
     const [tka, tkb, tkc] = await Promise.all([tokenAt(0), tokenAt(1), tokenAt(2)]);
@@ -227,9 +322,9 @@ describe.skipIf(!anvilUp || !POOL)("frontend against local anvil", () => {
     expect(tka).toBeDefined();
   });
 
-  test("liquidity page: select 3 tokens, fund + approve a pair, mint a position", SLOW, async () => {
-    const [tka, tkb] = await Promise.all([tokenAt(0), tokenAt(1)]);
-    const liquidityBefore = await pairLiquidity(0, 1);
+  test("liquidity page: select 3 tokens, then fund + approve + mint a position on every pair", async () => {
+    const tokens = await Promise.all([0, 1, 2].map(tokenAt));
+    const liquidityBefore = await Promise.all(ALL_PAIRS.map(([i, j]) => pairLiquidity(i, j)));
 
     render(<LiquidityPage />, { wrapper: Providers });
 
@@ -242,41 +337,54 @@ describe.skipIf(!anvilUp || !POOL)("frontend against local anvil", () => {
     await screen.findByText("TKA / TKB", undefined, WAIT);
     expect(screen.getByText("TKA / TKC")).toBeInTheDocument();
     expect(screen.getByText("TKB / TKC")).toBeInTheDocument();
+    expect(document.querySelectorAll(".liquidity-pair-row")).toHaveLength(ALL_PAIRS.length);
 
-    const row = within(screen.getByText("TKA / TKB").closest(".liquidity-pair-row") as HTMLElement);
+    for (const [k, [i, j]] of ALL_PAIRS.entries()) {
+      const title = `${SYMBOLS[i]} / ${SYMBOLS[j]}`;
+      const row = within(screen.getByText(title).closest(".liquidity-pair-row") as HTMLElement);
 
-    // previewMint quote (independent of allowance) renders both token amounts.
-    await row.findByText(/^TKA: \d/, undefined, WAIT);
-    await row.findByText(/^TKB: \d/, undefined, WAIT);
+      // previewMint quote (independent of allowance) renders both token amounts.
+      await row.findByText(new RegExp(`^${SYMBOLS[i]}: \\d`), undefined, WAIT);
+      await row.findByText(new RegExp(`^${SYMBOLS[j]}: \\d`), undefined, WAIT);
 
-    // Fund via faucet, one at a time so the connector's nonces stay in order.
-    const tkaBefore = await balanceOf(tka, ACCOUNT);
-    fireEvent.click(buttonByText(row, "Get 1000 TKA"));
-    await waitFor(async () => {
-      expect(await balanceOf(tka, ACCOUNT)).toBe(tkaBefore + parseUnits("1000", 18));
-    }, WAIT);
-    const tkbBefore = await balanceOf(tkb, ACCOUNT);
-    fireEvent.click(buttonByText(row, "Get 1000 TKB"));
-    await waitFor(async () => {
-      expect(await balanceOf(tkb, ACCOUNT)).toBe(tkbBefore + parseUnits("1000", 18));
-    }, WAIT);
+      // Fund via the row's own faucets, one at a time so the connector's nonces stay in order.
+      const before: bigint[] = [];
+      for (const idx of [i, j]) {
+        before[idx] = await balanceOf(tokens[idx], ACCOUNT);
+        fireEvent.click(buttonByText(row, `Get 1000 ${SYMBOLS[idx]}`));
+        await waitFor(async () => {
+          expect(await balanceOf(tokens[idx], ACCOUNT)).toBe(before[idx] + parseUnits("1000", 18));
+        }, WAIT);
+      }
 
-    // Approve each side; the button disappears once its allowance covers the preview amount.
-    for (const symbol of ["TKA", "TKB"]) {
-      fireEvent.click(await findButtonByText(row, `Approve ${symbol}`));
-      await waitFor(() => expect(row.queryByText(`Approve ${symbol}`)).toBeNull(), WAIT);
+      // Approve each side that still needs it. `approve()` grants an unlimited allowance, so a
+      // token already approved in an earlier row must NOT be asked for again here.
+      for (const idx of [i, j]) {
+        const label = `Approve ${SYMBOLS[idx]}`;
+        const approveButton = row.queryByText(label, { selector: "button span" })?.closest("button");
+        if (approveButton) {
+          fireEvent.click(approveButton);
+          await waitFor(() => expect(row.queryByText(label)).toBeNull(), WAIT);
+        }
+      }
+
+      const mintButton = await findButtonByText(row, "Provide liquidity");
+      await waitFor(() => expect(mintButton).toBeEnabled(), WAIT);
+      expect(row.queryByText(/reverted/), `${title}: mint simulation reverted`).toBeNull();
+      fireEvent.click(mintButton);
+      await row.findByText("Minted ✓", undefined, WAIT);
+
+      // Default form values: 100 liquidity per pair across ±6000 ticks around the current price,
+      // so the range is active and the pair's in-range liquidity grows by exactly that much.
+      expect(await pairLiquidity(i, j), `${title}: in-range liquidity`).toBe(
+        liquidityBefore[k] + parseUnits("100", 18),
+      );
+      expect(await balanceOf(tokens[i], ACCOUNT)).toBeLessThan(before[i] + parseUnits("1000", 18));
+      expect(await balanceOf(tokens[j], ACCOUNT)).toBeLessThan(before[j] + parseUnits("1000", 18));
     }
 
-    const mintButton = await findButtonByText(row, "Provide liquidity");
-    await waitFor(() => expect(mintButton).toBeEnabled(), WAIT);
-    expect(row.queryByText(/reverted/)).toBeNull();
-    fireEvent.click(mintButton);
-    await row.findByText("Minted ✓", undefined, WAIT);
-
-    // Default form values: 100 liquidity per pair across ±6000 ticks around the current price,
-    // so the range is active and the pair's in-range liquidity grows by exactly that much.
-    expect(await pairLiquidity(0, 1)).toBe(liquidityBefore + parseUnits("100", 18));
-    expect(await balanceOf(tka, ACCOUNT)).toBeLessThan(tkaBefore + parseUnits("1000", 18));
-    expect(await balanceOf(tkb, ACCOUNT)).toBeLessThan(tkbBefore + parseUnits("1000", 18));
-  });
+    // Every token is in two pairs, so each got approved exactly once (unlimited) and no row
+    // should still be offering an approval.
+    expect(screen.queryAllByText(/^Approve TK[ABC]$/)).toHaveLength(0);
+  }, 180_000);
 });
