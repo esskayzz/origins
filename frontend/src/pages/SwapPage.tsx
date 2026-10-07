@@ -120,12 +120,7 @@ export function SwapPage() {
                 onClick={() => setAmountInText(formatUnits(balance, tokenIn.decimals))}
               >
                 Max
-              </Button>{" "}
-              <FaucetButton
-                tokenAddress={tokenIn.address}
-                symbol={tokenIn.symbol}
-                decimals={tokenIn.decimals}
-              />
+              </Button>
             </Typography.Text>
           )}
         </div>
@@ -189,6 +184,26 @@ export function SwapPage() {
               </Button>
             }
           />
+        )}
+
+        {/* One faucet per pool token, not just the current input side: a fresh wallet needs the
+            other tokens too (to swap the other direction, or to provide liquidity). */}
+        {account && tokens.length > 0 && (
+          <div className="faucet-row">
+            <Typography.Text type="secondary" className="hint">
+              Faucet
+            </Typography.Text>
+            <Space wrap size="middle">
+              {tokens.map((t) => (
+                <FaucetButton
+                  key={t.address}
+                  tokenAddress={t.address}
+                  symbol={t.symbol}
+                  decimals={t.decimals}
+                />
+              ))}
+            </Space>
+          </div>
         )}
       </Space>
     </Card>
