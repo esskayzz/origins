@@ -12,10 +12,19 @@ contract DeployNDimPool is Script {
     uint256 internal constant SEED = 1_000e18;
 
     function run() external {
-        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerKey);
-
-        vm.startBroadcast(deployerKey);
+        // Two ways to sign:
+        //  - PRIVATE_KEY env var (raw key; fine for anvil's well-known dev accounts), or
+        //  - no PRIVATE_KEY and `forge script --account <keystore> --sender <addr>` (or
+        //    `--private-key`), in which case forge supplies the signer and we broadcast as it.
+        uint256 deployerKey = vm.envOr("PRIVATE_KEY", uint256(0));
+        address deployer;
+        if (deployerKey != 0) {
+            deployer = vm.addr(deployerKey);
+            vm.startBroadcast(deployerKey);
+        } else {
+            deployer = msg.sender;
+            vm.startBroadcast();
+        }
 
         TestERC20 tokenA = new TestERC20("Token A", "TKA");
         TestERC20 tokenB = new TestERC20("Token B", "TKB");
