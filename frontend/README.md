@@ -62,9 +62,16 @@ required:
    to point at that network's deployed `NDimPool` address. Both your chosen
    network and pool address are remembered per-network in `localStorage`.
 2. **Via environment variables** — copy `.env.example` to `.env.local` and set:
-   - `VITE_LOCAL_RPC_URL` / `VITE_TESTNET_RPC_URL` — RPC endpoints used for
-     read calls (your wallet still decides which network it actually signs
-     transactions on).
+   - `NOWNODES_API_KEY` — your [NOWNodes](https://docs.nownodes.io/nodeapis/)
+     key, read **server-side only** by the `/api/rpc` proxy (`server/rpcProxy.ts`,
+     served by the Vite dev server locally and by `api/rpc.ts` on Vercel). With
+     it set, Sepolia reads/simulations go to `https://eth-sepolia.nownodes.io`;
+     without it the proxy falls back to a keyless public endpoint. The key is
+     never compiled into the browser bundle.
+   - `VITE_LOCAL_RPC_URL` / `VITE_TESTNET_RPC_URL` — RPC endpoint overrides used
+     for read calls (your wallet still decides which network it actually signs
+     transactions on). The testnet default is the `/api/rpc` proxy; set an
+     absolute URL here only when hosting somewhere without it.
    - `VITE_POOL_ADDRESS_31337` / `VITE_POOL_ADDRESS_11155111` — default pool
      addresses, used as a fallback when nothing is saved in `localStorage` yet.
 
@@ -91,6 +98,26 @@ deployed address into the in-app "Pool address" field, or set
 
 `TestERC20` (used in the test suite) exposes a public, unrestricted `mint()` —
 useful as a faucet when testing locally or on a testnet.
+
+## Deploying to Vercel
+
+The app is a static Vite build plus one serverless function, which is exactly
+Vercel's model. Import the repo and set:
+
+1. **Root Directory** → `frontend` (the app lives in a subfolder of the Foundry
+   repo). Vercel then auto-detects Vite: `npm run build` → `dist/`.
+2. **Environment variables**:
+   - `NOWNODES_API_KEY` — server-side only, read by `api/rpc.ts`. Optional; the
+     proxy falls back to a public Sepolia endpoint without it.
+   - `VITE_POOL_ADDRESS_11155111` — the Sepolia `NDimPool` address.
+
+`vercel.json` rewrites every non-`/api/*` path to `index.html` so deep links
+like `/swap` and `/liquidity` survive a refresh (the app uses `BrowserRouter`).
+The `/api/rpc` function only accepts `POST` and a read-only allowlist of
+JSON-RPC methods (plus `eth_sendRawTransaction`), so it can't be repurposed as
+a general node. Note the **Local (Anvil)** network in the chain switcher points
+at the visitor's own machine, so on a deployed site only Sepolia is usable by
+anyone else.
 
 ## Layout
 

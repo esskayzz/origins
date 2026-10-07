@@ -9,13 +9,8 @@ import { mock } from "wagmi/connectors";
 import { connect, readContract, waitForTransactionReceipt, writeContract } from "wagmi/actions";
 import { formatUnits, parseUnits } from "viem";
 import type { Address } from "viem";
-import {
-  LOCAL_RPC_URL,
-  TESTNET_RPC_URL,
-  localAnvil,
-  sepoliaTestnet,
-  supportedChains,
-} from "../../src/constants/chains";
+import { LOCAL_RPC_URL, localAnvil, sepoliaTestnet, supportedChains } from "../../src/constants/chains";
+import { testnetTransport } from "../../src/services/wagmiConfig";
 import { ERC20_ABI, NDIM_POOL_ABI } from "../../src/constants/contracts";
 import { usePoolConfigStore } from "../../src/store/usePoolConfigStore";
 import { SwapPage } from "../../src/pages/SwapPage";
@@ -71,7 +66,7 @@ const config = createConfig({
   // mount-time reconnect finds no authorized connector and flips the state back to disconnected
   // right after the first render, unmounting every account-gated control (e.g. FaucetButton).
   connectors: [mock({ accounts: [ACCOUNT], features: { reconnect: true } })],
-  transports: { [localAnvil.id]: http(LOCAL_RPC_URL), [sepoliaTestnet.id]: http(TESTNET_RPC_URL) },
+  transports: { [localAnvil.id]: http(LOCAL_RPC_URL), [sepoliaTestnet.id]: testnetTransport() },
   // Default is 4s; anvil mines instantly so tight polling keeps `useWaitForTransactionReceipt` snappy.
   pollingInterval: 50,
 });
