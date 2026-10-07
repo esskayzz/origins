@@ -13,7 +13,7 @@ import { FaucetButton } from "../components/common/FaucetButton";
 export function SwapPage() {
   const { poolAddress } = usePoolAddress();
   const { address: account } = useAccount();
-  const { tokens, isLoading: tokensLoading, isInitialized } = usePoolTokens(poolAddress);
+  const { tokens, isLoading: tokensLoading, isInitialized, error: poolError } = usePoolTokens(poolAddress);
 
   const [tokenInIdx, setTokenInIdx] = useState(0);
   const [tokenOutIdx, setTokenOutIdx] = useState(1);
@@ -87,6 +87,25 @@ export function SwapPage() {
       <Card>
         <Spin /> <Typography.Text type="secondary">Loading pool tokens…</Typography.Text>
       </Card>
+    );
+  }
+  // A failed read is NOT the same as an un-seeded pool: reporting an unreachable RPC as
+  // "not initialized" sends you looking at the contract when the network is the problem.
+  if (poolError) {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="Couldn't read the pool"
+        description={
+          <>
+            {poolError instanceof BaseError ? poolError.shortMessage : poolError.message}
+            <br />
+            Check that the pool address is right for the network your wallet is on, and that the RPC endpoint
+            is reachable.
+          </>
+        }
+      />
     );
   }
   if (!isInitialized) return <Alert type="warning" showIcon message="Pool is not initialized yet." />;

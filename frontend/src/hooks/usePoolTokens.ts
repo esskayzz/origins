@@ -8,18 +8,30 @@ export interface PoolTokensResult {
   tokens: PoolToken[];
   isLoading: boolean;
   isInitialized: boolean;
+  /** Set when the chain reads themselves failed (bad RPC, wrong network, no contract at the
+   * address). Distinct from `isInitialized === false`, which means the pool really does exist
+   * and really has not been seeded -- callers must not report an unreachable node as that. */
+  error: Error | null;
 }
 
 /** Reads `n`, every `tokens(i)` address, and each token's symbol/decimals. */
 export function usePoolTokens(poolAddress: Address | undefined): PoolTokensResult {
-  const { data: n, isLoading: nLoading } = useReadContract({
+  const {
+    data: n,
+    isLoading: nLoading,
+    error: nError,
+  } = useReadContract({
     address: poolAddress,
     abi: NDIM_POOL_ABI,
     functionName: "n",
     query: { enabled: Boolean(poolAddress) },
   });
 
-  const { data: initialized } = useReadContract({
+  const {
+    data: initialized,
+    isLoading: initLoading,
+    error: initError,
+  } = useReadContract({
     address: poolAddress,
     abi: NDIM_POOL_ABI,
     functionName: "initialized",
@@ -73,7 +85,10 @@ export function usePoolTokens(poolAddress: Address | undefined): PoolTokensResul
 
   return {
     tokens,
-    isLoading: nLoading || addrsLoading || metaLoading,
-    isInitialized: Boolean(initialized),
+    // `initLoading` matters: without it there is a window where loading is already false but
+    // `initialized` is still undefined, which flashed "Pool is not initialized yet."
+    isLoading: nLoading || initLoading || addrsLoading || metaLoading,
+    isInitialized: initialized === true,
+    error: nError ?? initError ?? null,
   };
 }

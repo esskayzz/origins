@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { parseUnits } from "viem";
+import { BaseError, parseUnits } from "viem";
 import { Alert, Card, Checkbox, Input, InputNumber, Space, Spin, Typography } from "antd";
 import { usePoolAddress } from "../hooks/usePoolAddress";
 import { usePoolTokens } from "../hooks/usePoolTokens";
@@ -17,7 +17,7 @@ function combinations<T>(items: T[]): [T, T][] {
 
 export function LiquidityPage() {
   const { poolAddress } = usePoolAddress();
-  const { tokens, isLoading, isInitialized } = usePoolTokens(poolAddress);
+  const { tokens, isLoading, isInitialized, error: poolError } = usePoolTokens(poolAddress);
   const { data: tickSpacing } = useReadContract({
     address: poolAddress,
     abi: NDIM_POOL_ABI,
@@ -64,6 +64,24 @@ export function LiquidityPage() {
       <Card>
         <Spin /> <Typography.Text type="secondary">Loading pool tokens…</Typography.Text>
       </Card>
+    );
+  }
+  // See SwapPage: an unreachable RPC must not be reported as an un-seeded pool.
+  if (poolError) {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        message="Couldn't read the pool"
+        description={
+          <>
+            {poolError instanceof BaseError ? poolError.shortMessage : poolError.message}
+            <br />
+            Check that the pool address is right for the network your wallet is on, and that the RPC endpoint
+            is reachable.
+          </>
+        }
+      />
     );
   }
   if (!isInitialized) return <Alert type="warning" showIcon message="Pool is not initialized yet." />;

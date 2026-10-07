@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { loadEnv, type Plugin } from "vite";
 import { defineConfig } from "vitest/config";
@@ -47,10 +48,18 @@ function rpcProxyPlugin(env: Record<string, string | undefined>): Plugin {
   };
 }
 
+/** Server-side env for the proxy. Empty prefix so non-`VITE_` vars (NOWNODES_API_KEY) are picked
+ * up, and the repo root is read as well as `frontend/`: the root `.env` is where `foundry.toml`
+ * already reads the same key from, so it stays the single place to put it. Frontend values win. */
+function serverEnv(mode: string): Record<string, string | undefined> {
+  const frontendDir = fileURLToPath(new URL(".", import.meta.url));
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+  return { ...loadEnv(mode, repoRoot, ""), ...loadEnv(mode, frontendDir, "") };
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  // Empty prefix: also load non-VITE_ vars (NOWNODES_API_KEY) from .env files for the proxy.
-  plugins: [react(), rpcProxyPlugin(loadEnv(mode, process.cwd(), ""))],
+  plugins: [react(), rpcProxyPlugin(serverEnv(mode))],
   test: {
     environment: "jsdom",
     setupFiles: ["./tests/setup.ts"],
