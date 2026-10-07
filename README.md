@@ -1,4 +1,4 @@
-# origins — N-dimensional concentrated liquidity AMM
+# Hypersphere — N-dimensional concentrated liquidity AMM
 
 A Uniswap v4-inspired reference implementation that extends concentrated
 liquidity pools from 2 tokens to **N tokens** in a single pool contract.

@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Runs lint-staged (oxlint + prettier) on staged frontend/ files before each commit.
+cd frontend && npx lint-staged
