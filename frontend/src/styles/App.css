@@ -122,3 +122,14 @@
   font-size: 13px;
   color: #777;
 }
+
+/* Faucet links for every pool token, at the foot of the swap card. The divider colour is a
+   mid grey so it reads on both the light dashboard and the dark landing page. */
+.faucet-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+  padding-top: 12px;
+}

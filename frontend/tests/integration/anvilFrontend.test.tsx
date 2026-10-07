@@ -199,6 +199,34 @@ describe.skipIf(!anvilUp || !POOL)("frontend against local anvil", () => {
     expect(await balanceOf(tkb, ACCOUNT)).toBe(tkbBefore + quoted);
   });
 
+  test("swap page: faucets cover every pool token, not just the input side", SLOW, async () => {
+    const [tka, tkb, tkc] = await Promise.all([tokenAt(0), tokenAt(1), tokenAt(2)]);
+
+    render(<SwapPage />, { wrapper: Providers });
+    await screen.findByText(/Balance:/, undefined, WAIT);
+
+    // The input side defaults to TKA, but TKB and TKC must be faucetable too -- otherwise a
+    // fresh wallet can never swap in the other direction or provide liquidity.
+    buttonByText(screen, "Get 1000 TKA");
+
+    const tkbBefore = await balanceOf(tkb, ACCOUNT);
+    fireEvent.click(buttonByText(screen, "Get 1000 TKB"));
+    await waitFor(async () => {
+      expect(await balanceOf(tkb, ACCOUNT)).toBe(tkbBefore + parseUnits("1000", 18));
+    }, WAIT);
+
+    const tkcBefore = await balanceOf(tkc, ACCOUNT);
+    fireEvent.click(buttonByText(screen, "Get 1000 TKC"));
+    await waitFor(async () => {
+      expect(await balanceOf(tkc, ACCOUNT)).toBe(tkcBefore + parseUnits("1000", 18));
+    }, WAIT);
+
+    // Each token has exactly one faucet on the page, so the earlier `getByText` lookups stay
+    // unambiguous (an inline duplicate next to the balance line would break them).
+    expect(screen.getAllByText(/^Get 1000 TK[ABC]$/, { selector: "button span" })).toHaveLength(3);
+    expect(tka).toBeDefined();
+  });
+
   test("liquidity page: select 3 tokens, fund + approve a pair, mint a position", SLOW, async () => {
     const [tka, tkb] = await Promise.all([tokenAt(0), tokenAt(1)]);
     const liquidityBefore = await pairLiquidity(0, 1);
