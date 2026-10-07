@@ -12,8 +12,8 @@ Library, Prettier + Husky + lint-staged), adapted for a wallet-connected dapp
 with no REST backend (see [Deviations from the template](#deviations-from-the-template)).
 
 UI is themed with [Ant Design](https://ant.design) + [Ant Design Web3](https://web3.ant.design),
-in the visual language of the Ant Design Pro kit (a reference copy of the
-official Sketch kit lives in [`../design`](../design)): a centered login card
+in the visual language of the [Ant Design Pro](https://pro.ant.design) kit: a
+centered login card
 to connect a wallet, then a dark sider + light content dashboard shell with
 `Swap`/`Provide liquidity` pages.
 
