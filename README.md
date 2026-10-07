@@ -2,10 +2,13 @@
 
 A Uniswap v4-inspired reference implementation that extends concentrated
 liquidity pools from 2 tokens to **N tokens** in a single pool contract.
-Every pair of tokens `(i, j)` trades along a circle `x_i² + x_j² = L_ij²` —
-the sum-of-squares analogue of v3/v4's `x·y = L²` hyperbola — using the same
-`1.0001^tick` price convention and single-range concentrated-liquidity
-mechanics LPs already know from v3/v4.
+Every pair of tokens `(i, j)` trades along a circle centred at `(L_ij, L_ij)`,
+`(L_ij − x_i)² + (L_ij − x_j)² = L_ij²` — the sum-of-squares analogue of v3/v4's
+`x·y = L²` hyperbola — using the same `1.0001^tick` price convention and
+single-range concentrated-liquidity mechanics LPs already know from v3/v4. The
+centre placement is what makes the curve convex where trading happens, giving it
+a stableswap shape: nearly flat near the balanced point, steep at the edges, and
+with finite depth (see [docs/DESIGN.md](docs/DESIGN.md) section 2a).
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the full math writeup (invariant,
 tick system, mint/burn formulas, swap algorithm, and explicit scope/
@@ -79,7 +82,9 @@ and a default `--gas-estimate-multiplier` of 130% would push the pool deploy
 over the cap. `--skip-simulation` makes forge take gas from the node's
 `eth_estimateGas` instead, and `100` disables the multiplier. `foundry.toml`'s
 `optimizer_runs = 1` / no metadata hash exist for the same reason: they shrink
-`NDimPool` from 10,438 to 10,168 bytes, which is what fits under the cap.
+`NDimPool` by a few hundred bytes. At 9,893 bytes the pool deploy costs
+~16.08M gas, leaving ~0.7M under the cap; check `forge build --sizes` before
+deploying if the contract grows.
 
 The deployer needs a little Sepolia ETH (the whole deploy is ~26M gas, a few
 ten-thousandths of an ETH at typical Sepolia prices). Afterwards set
@@ -90,10 +95,13 @@ Current Sepolia deployment (deployer `0x37e3C22A7e155e65f32B35c149a2aF23176d107e
 
 | Contract | Address |
 | --- | --- |
-| `NDimPool` | `0xb55Dc1fa2ACfB4e1C0CBC46C77E941f76775B92b` |
-| TKA (`TestERC20`) | `0x7BD498d5b870B66e2457218C54AD0e30d9A28007` |
-| TKB (`TestERC20`) | `0xE9957C35D5A0B76a6544abeA81B584C96D4A3e73` |
-| TKC (`TestERC20`) | `0x2FEBECf56748D7E7b0e39e6976918475af5488d8` |
+| `NDimPool` | `0xD83e212B89b622400aa1a0e360E5cBd2d4920711` |
+| TKA (`TestERC20`) | `0x661D9f45511A1579642c932AB927a01cE25eEace` |
+| TKB (`TestERC20`) | `0xa0Bc31D541dd3f16460fCC1296A6c0813E03a576` |
+| TKC (`TestERC20`) | `0x29dfB41D58EDE6d0fF14063344102375B81F4cC1` |
+
+(An earlier deployment at `0xb55Dc1fa…` carried the origin-centred invariant and
+is superseded — do not use it; see [docs/DESIGN.md](docs/DESIGN.md) section 2a.)
 
 `TestERC20.mint()` is public, so anyone can faucet themselves TKA/TKB/TKC (the
 frontend's "Get 1000 …" links do exactly that).
