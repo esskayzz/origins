@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { decodeErrorResult } from "viem";
 
 // contracts.ts reads its env at module-evaluation time, so each case re-imports it fresh.
 async function loadContracts() {
@@ -36,5 +37,32 @@ describe("DEFAULT_POOL_ADDRESSES", () => {
     expect(c.isSupersededPool(c.SEPOLIA_POOL_ADDRESS)).toBe(false);
     expect(c.isSupersededPool(c.SUPERSEDED_POOL_ADDRESSES[0])).toBe(true);
     expect(c.isSupersededPool(undefined)).toBe(false);
+  });
+});
+
+// Regression test for: `mint` reverting showed "reverted with the following signature:
+// 0x7939f424" because the ABI declared no errors. That selector is Solady's TransferFromFailed
+// (the pool could not pull a token: insufficient balance or allowance).
+describe("NDIM_POOL_ABI errors", () => {
+  test("decodes 0x7939f424 as TransferFromFailed", async () => {
+    const c = await loadContracts();
+    const decoded = decodeErrorResult({ abi: c.NDIM_POOL_ABI, data: "0x7939f424" });
+    expect(decoded.errorName).toBe("TransferFromFailed");
+  });
+
+  test("declares every NDimPool custom error", async () => {
+    const c = await loadContracts();
+    const names = c.NDIM_POOL_ABI.filter((e) => e.type === "error").map((e) => e.name);
+    for (const name of [
+      "InvalidTokenIndex",
+      "InvalidTickRange",
+      "InsufficientLiquidity",
+      "ZeroLiquidity",
+      "ZeroReserve",
+      "AlreadyInitialized",
+      "NotInitialized",
+    ]) {
+      expect(names, `missing error ${name}`).toContain(name);
+    }
   });
 });

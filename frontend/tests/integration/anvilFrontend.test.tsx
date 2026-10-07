@@ -322,6 +322,37 @@ describe.skipIf(!anvilUp || !POOL)("frontend against local anvil", () => {
     expect(tka).toBeDefined();
   });
 
+  // Regression test for: with an approved token but not enough balance for the preview amounts,
+  // the mint simulation reverted with Solady's TransferFromFailed and the row showed the bare
+  // selector "0x7939f424". The row must say which token is short instead, and not offer to mint.
+  test("liquidity page: an unaffordable position reports the shortfall instead of a raw revert", async () => {
+    render(<LiquidityPage />, { wrapper: Providers });
+
+    await screen.findByLabelText("TKA", undefined, WAIT);
+    fireEvent.click(screen.getByLabelText("TKA"));
+    fireEvent.click(screen.getByLabelText("TKB"));
+    await screen.findByText("TKA / TKB", undefined, WAIT);
+    const row = within(screen.getByText("TKA / TKB").closest(".liquidity-pair-row") as HTMLElement);
+    await row.findByText(/^TKA: \d/, undefined, WAIT);
+
+    // Pre-approve so allowance is not what blocks the mint (that is the "sometimes" case).
+    for (const symbol of ["TKA", "TKB"]) {
+      const btn = row.queryByText(`Approve ${symbol}`, { selector: "button span" })?.closest("button");
+      if (btn) {
+        fireEvent.click(btn);
+        await waitFor(() => expect(row.queryByText(`Approve ${symbol}`)).toBeNull(), WAIT);
+      }
+    }
+
+    // Ask for far more liquidity than the faucet's 1000 tokens can back.
+    fireEvent.change(screen.getByDisplayValue("100"), { target: { value: "1000000" } });
+
+    await row.findByText(/^Insufficient TKA: this position needs/, undefined, WAIT);
+    await row.findByText(/^Insufficient TKB: this position needs/, undefined, WAIT);
+    expect(row.queryByText(/reverted|0x7939f424|TransferFromFailed/)).toBeNull();
+    await waitFor(() => expect(buttonByText(row, "Provide liquidity")).toBeDisabled(), WAIT);
+  }, 60_000);
+
   test("liquidity page: select 3 tokens, then fund + approve + mint a position on every pair", async () => {
     const tokens = await Promise.all([0, 1, 2].map(tokenAt));
     const liquidityBefore = await Promise.all(ALL_PAIRS.map(([i, j]) => pairLiquidity(i, j)));
