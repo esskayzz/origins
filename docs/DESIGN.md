@@ -13,15 +13,63 @@ This design generalizes that model to a single pool holding **N tokens**
 - keeping the *same tick-range mental model* LPs already understand (a
   position still has exactly one `[tickLower, tickUpper]`, not one per
   token-pair),
-- replacing the hyperbola with a **circle** per pair (`x_i² + x_j² = L_ij²`),
-  as requested — the sum-of-squares analogue of v3's product invariant, and
+- replacing the hyperbola with a **circle** per pair
+  (`(L_ij − x_i)² + (L_ij − x_j)² = L_ij²`), as requested — the sum-of-squares
+  analogue of v3's product invariant, centred so that the curve is convex where
+  trading happens (§2a), and
 - reusing v3/v4's exact tick→price convention (`price(tick) = 1.0001^tick`)
   so existing tick math/intuition carries over,
 - sharing **custody of all N token balances in one contract**, so a trade
   routed through several hops (e.g. `i → j → k`) nets out the intermediate
   token atomically instead of needing N(N-1)/2 separately deployed pools.
 
-## 2. The invariant, and why it is per-pair (not one global sphere)
+## 2. The invariant: a circle centred at `(L, L)`, per pair
+
+### 2a. Why the circle must be centred, not origin-centred
+
+The obvious reading of "sum of squares" is the origin-centred circle
+`x_i² + x_j² = L²`. **That curve cannot be used as an AMM**, and an earlier
+revision of this implementation shipped it. Differentiating gives the marginal
+price `−dx_j/dx_i = x_i / x_j`, which *rises* as token i is sold. Each extra
+unit of input buys more output than the last, so price impact runs in the
+trader's favour, LPs are strictly worse off than holding, and the first
+arbitrageur drains the pair. Measured on a 1000/1000 pool, selling 10 token i
+returned 13.9 token j and selling 200 returned 390 — both above fair value.
+The underlying defect is that an AMM's feasible region must be **convex**;
+`x_i² + x_j² ≥ L²` is the outside of a disk, which is not.
+
+The fix is to move the centre so the arc reserves travel along bulges *toward*
+the origin:
+
+```
+(L_ij − x_i)² + (L_ij − x_j)² = L_ij²        0 ≤ x_i, x_j ≤ L_ij
+```
+
+Writing `u_i = L − x_i` for each reserve's distance from the centre, the pair
+still lives on a circle `u_i² + u_j² = L²`, but now the feasible region is a
+*ball* (convex), and the marginal price is
+
+```
+p  =  −dx_j/dx_i  =  u_i / u_j
+```
+
+which **falls** as token i is sold, exactly as it must. The resulting curve is
+flat near the balanced point and steep at the edges — a stableswap shape, well
+suited to correlated assets and a poor fit for volatile pairs. Unlike v2's
+hyperbola it has finite depth: the arc from the balanced point to price zero
+absorbs at most `L·sin θ` of token i (~2414 units on a 1000/1000 seed), and a
+swap beyond that reverts with `InsufficientLiquidity` rather than emptying the
+reserve at a favourable rate. This is the same family of surface as Paradigm's
+Orbital, which centres its N-sphere at `(r, ..., r)` for the same reason.
+
+Seeding solves the invariant for its radius, taking the root with
+`L ≥ max(x_i, x_j)` so the reserves land on the near arc:
+
+```
+L_ij = x_i + x_j + sqrt(2 · x_i · x_j)        (= x·(2 + sqrt 2) when x_i = x_j = x)
+```
+
+### 2b. Why it is per-pair, not one global sphere
 
 A first instinct is to enforce one global hypersphere `x_1² + ... + x_N² = L²`
 with a *single* scalar `L` shared by the whole pool, and derive each pair's
@@ -82,21 +130,40 @@ moves `x_i` (verified not to happen for untouched reserves in the same test).
 
 ## 4. Parametrizing a pair's circle with price (and reusing v3 ticks)
 
-On pair `(i,j)`'s circle `x_i² + x_j² = L_ij²`, define its price exactly as v3
-defines token0/token1's:
+On pair `(i,j)`'s centred circle, price is the ratio of the two reserves'
+*distances from the centre* — which is also, unlike the origin-centred version,
+the true marginal rate:
 
 ```
-p = x_j / x_i                 (price of token i, denominated in token j)
-tick → p(tick) = 1.0001^tick  (identical convention to v3/v4)
+p = u_i / u_j = (L − x_i)/(L − x_j)   (price of token i, denominated in token j)
+tick → p(tick) = 1.0001^tick          (identical convention to v3/v4)
 ```
 
-Given `p`, the unshifted circle point is recovered without any trigonometry:
+Given `p`, the circle point is recovered without any trigonometry:
 
 ```
 cos θ(p) = 1 / sqrt(1 + p²)
 sin θ(p) = p / sqrt(1 + p²)
-x_i = L_ij · cos θ(p),   x_j = L_ij · sin θ(p)   (on an unshifted circle)
+x_i = L_ij · (1 − sin θ(p)),   x_j = L_ij · (1 − cos θ(p))
 ```
+
+Note `sin` now carries token i and `cos` token j, the opposite of the
+origin-centred parametrization. As `p` rises, `x_i` falls and `x_j` rises, so
+the familiar directional convention survives: price below a range leaves the
+position entirely in token i, above it entirely in token j.
+
+**Price is stored, not derived.** `pairPrice[pairKey(i,j)]` is pool state,
+updated only by swaps — the analogue of v3's `sqrtPriceX96`. Deriving it from
+`reserves[j]/reserves[i]` is wrong once liquidity is concentrated, because each
+position's real reserves are offset from the bare circle point by
+range-dependent constants (§5); it also let an in-range `mint` move the quoted
+price without any trade. `reserves` is therefore pure custody: the balance of
+each token, shared by every pair that token participates in. One consequence
+worth naming: because pairs price independently while sharing custody, the
+claims of pair `(i,j)` and pair `(i,k)` on token `i` can in principle exceed the
+balance, in which case the later payout reverts on the transfer rather than
+over-paying. Splitting seed capital per pair would remove this; it is left out
+of this reference implementation.
 
 Ticks keep their familiar meaning (1 tick ≈ 1 bps price movement), and
 `price(tick) = 1.0001^tick` is computed via `solady`'s `lnWad`/`expWad`
@@ -114,16 +181,16 @@ The position's token amounts for current price `p` and liquidity `l` are:
 
 ```
 if p ≤ p_a (price below range, position is 100% token i):
-    amount_i = l · (cos θ_a − cos θ_b)
+    amount_i = l · (sin θ_b − sin θ_a)
     amount_j = 0
 
 if p_a < p < p_b (price inside range):
-    amount_i = l · (cos θ   − cos θ_b)
-    amount_j = l · (sin θ   − sin θ_a)
+    amount_i = l · (sin θ_b − sin θ)
+    amount_j = l · (cos θ_a − cos θ)
 
 if p ≥ p_b (price above range, position is 100% token j):
     amount_i = 0
-    amount_j = l · (sin θ_b − sin θ_a)
+    amount_j = l · (cos θ_a − cos θ_b)
 ```
 
 These are the exact circle analogues of v3's
@@ -131,34 +198,44 @@ These are the exact circle analogues of v3's
 satisfy the same boundary conditions (amount_i → 0 at the upper tick,
 amount_j → 0 at the lower tick). As with v3, note that **deltas** between two
 prices within a constant-`L_ij` interval collapse to
-`Δamount_i = l·(cos θ_2 − cos θ_1)` — the offset terms cancel — which is
-exactly what the swap step (§6) uses, and why it never needs to recompute an
-absolute `(x_i, x_j)` position from `L_ij` alone.
+`Δamount_i = l·(sin θ_2 − sin θ_1)` — both the range offsets *and* the circle's
+centre offset cancel — which is exactly what the swap step (§6) uses, and why it
+never needs to recompute an absolute `(x_i, x_j)` position from `L_ij` alone.
 
 ## 6. Swap algorithm
 
 Swapping an exact input of token `i` for token `j` walks ticks on pair
-`(i, j)` exactly like `UniswapV3Pool.swap`, operating on **deltas** against
-the pair's current actual reserves rather than resetting them to an absolute
-circle point (see §5):
+`(i, j)` exactly like `UniswapV3Pool.swap`, operating on **deltas** along the
+arc rather than resetting reserves to an absolute circle point (see §5).
 
-1. Read the pair's current price `p = x_j / x_i` from actual reserves, and
-   its current active liquidity `L_ij`.
+Both directions are the *same* step with the roles of `sin` and `cos`
+exchanged. Call `a` the component the input consumes and `b` the one the output
+comes from; `a` always shrinks and `b` always grows. Selling token i walks the
+price **down**, so `a = sin`, `b = cos`; selling token j walks it **up**, so
+`a = cos`, `b = sin`. Then:
+
+1. Read the pair's stored price `p` (`pairPrice`) and active liquidity `L_ij`.
 2. Find the next initialized tick on pair `(i, j)` in the swap direction
    (linear scan of a sorted per-pair tick array in this implementation).
-3. Compute the input needed to reach that tick: `Δin = L_ij·|cos θ_target −
-   cos θ_current|` (or the `sin` form for the opposite direction). If the
-   remaining input is smaller, solve for the exact stopping `cos`/`sin`
-   within the step instead (no tick crossing).
-4. Apply the corresponding output delta to the *actual* reserves
-   (`x_i += Δin`, `x_j −= Δout`, or vice versa) — a running update, not an
-   absolute reset.
+3. Compute the input needed to reach that tick:
+   `Δin = L_ij·(a_current − a_target)`. If the remaining input is smaller,
+   solve for the exact resting point within the step instead (no tick
+   crossing): `a_new = a_current − remaining/L_ij`, then
+   `b_new = sqrt(1 − a_new²)`.
+4. Output for the step is `Δout = L_ij·(b_new − b_current)`, and the new price
+   is recovered as `tan θ` from the `(sin, cos)` pair.
 5. If the tick boundary is reached, cross it: adjust `L_ij` by the tick's
    `liquidityNet` (added when crossing upward, subtracted when crossing
    downward) and continue stepping with the new `L_ij`.
-6. Repeat until the input is exhausted or `MAX_SWAP_STEPS` is hit.
-7. A pips fee is deducted from the input up front and left in the pool as an
-   unattributed reserve donation (§7) before stepping begins.
+6. Repeat until the input is exhausted or `MAX_SWAP_STEPS` is hit. If input
+   remains after the last step, the pair's finite depth is exhausted and the
+   swap reverts with `InsufficientLiquidity` (§2a).
+7. Finally write back `pairPrice` and `pairLiquidity`, credit the whole input
+   to `reserves[tokenIn]` and debit the output from `reserves[tokenOut]`.
+
+A pips fee is withheld from the input before stepping and left in the pool as an
+unattributed reserve donation (§7). Because price is stored rather than derived,
+the fee does **not** nudge the price — only traded amounts move it.
 
 ## 7. What's intentionally out of scope for this reference implementation
 

@@ -4,6 +4,18 @@ out = "out"
 libs = ["lib"]
 via_ir = true
 optimizer = true
-optimizer_runs = 200
+# Size over runtime gas: Sepolia (post-Fusaka) charges ~1,542 gas per deployed byte and caps a
+# transaction at 16,777,216 gas, which leaves room for ~10.7 KB of runtime code. NDimPool is
+# 10,438 bytes at runs=200 and just misses; runs=1 plus dropping the CBOR metadata hash brings
+# it to 10,168 bytes, which fits. Measured against a live node, see README "Deploying to Sepolia".
+optimizer_runs = 1
+bytecode_hash = "none"
+cbor_metadata = false
+
+# `forge script ... --rpc-url sepolia`. SEPOLIA_RPC_URL lives in the (gitignored) root .env;
+# NOWNodes accepts the API key as a path segment (https://eth-sepolia.nownodes.io/<key>), which
+# is what makes it usable from forge, since `forge script` can't send custom headers.
+[rpc_endpoints]
+sepolia = "${SEPOLIA_RPC_URL}"
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

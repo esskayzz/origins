@@ -7,8 +7,12 @@ import {PriceMath} from "./libraries/PriceMath.sol";
 
 /// @title NDimPool
 /// @notice Reference implementation of an N-token concentrated liquidity pool.
-/// Every pair of tokens (i, j) trades along a circular slice `x_i^2 + x_j^2 = L_ij^2`
-/// (the sum-of-squares analogue of v3/v4's `x*y = L^2` hyperbola), reusing v3/v4's
+/// Every pair of tokens (i, j) trades along a circular slice
+/// `(L_ij - x_i)^2 + (L_ij - x_j)^2 = L_ij^2` -- a circle *centred at* `(L_ij, L_ij)`, so the
+/// arc reserves travel along bulges toward the origin and marginal price falls as a token is
+/// sold, exactly as it must for an AMM (docs/DESIGN.md section 2). It is the sum-of-squares
+/// analogue of v3/v4's `x*y = L^2` hyperbola and behaves like a stableswap curve: nearly flat
+/// near the balanced point, steep at the edges. The pool reuses v3/v4's
 /// `1.0001^tick` price convention and single-range concentrated-liquidity mechanics
 /// (see docs/DESIGN.md). Each pair's active liquidity `L_ij` is tracked independently
 /// -- concentrated liquidity ranges are inherently local to their own price axis and
@@ -53,10 +57,19 @@ contract NDimPool {
     /// pool's reserve as an unattributed donation (see docs/DESIGN.md section 7).
     uint24 public immutable feePips;
 
+    /// @dev Token custody only: the contract's balance of each token, shared by every pair that
+    /// token participates in. NOT the source of truth for any pair's price -- see `pairPrice`.
     uint256[] public reserves;
     /// @dev Per-pair active liquidity `L_ij` -- the sum-of-squares analogue of v3's
-    /// per-pool `liquidity`, keyed by `pairKey(i, j)`.
+    /// per-pool `liquidity`, and the radius of pair (i, j)'s circle, keyed by `pairKey(i, j)`.
     mapping(bytes32 => uint256) public pairLiquidity;
+    /// @dev Per-pair current price `p = (L - x_i) / (L - x_j)`, WAD, keyed by `pairKey(i, j)`.
+    /// Tracked as state (v3 tracks `sqrtPriceX96` the same way) rather than derived from
+    /// `reserves`: once liquidity is concentrated, a position's real reserves are offset from
+    /// the bare circle point by range-dependent constants (docs/DESIGN.md section 5), so the
+    /// aggregate reserve ratio is no longer the price. Deriving it would also let an in-range
+    /// mint move the quoted price without any trade happening.
+    mapping(bytes32 => uint256) public pairPrice;
 
     // pairKey(i,j) => tick => info
     mapping(bytes32 => mapping(int24 => TickInfo)) public ticks;
@@ -79,8 +92,10 @@ contract NDimPool {
     }
 
     /// @notice Seeds the pool's starting reserves (one per token). For every pair (i, j) this
-    /// establishes base full-range liquidity `L_ij = sqrt(x_i^2 + x_j^2)`, so every pair is
-    /// immediately tradeable. Must be called once, after approving this contract to pull
+    /// establishes base full-range liquidity by solving the centred invariant for its radius,
+    /// `L_ij = x_i + x_j + sqrt(2 * x_i * x_j)` (the root with `L >= max(x_i, x_j)`, so the
+    /// reserves sit on the arc nearest the origin), plus that pair's starting price. Every pair
+    /// is then immediately tradeable. Must be called once, after approving this contract to pull
     /// `initialReserves` of every token from the caller.
     function initialize(uint256[] calldata initialReserves) external {
         if (initialized) revert AlreadyInitialized();
@@ -95,8 +110,12 @@ contract NDimPool {
         }
         for (uint8 i; i < n; ++i) {
             for (uint8 j = i + 1; j < n; ++j) {
-                uint256 sumSquares = M.mulWad(reserves[i], reserves[i]) + M.mulWad(reserves[j], reserves[j]);
-                pairLiquidity[pairKey(i, j)] = M.sqrtWad(sumSquares);
+                uint256 xi = reserves[i];
+                uint256 xj = reserves[j];
+                uint256 l = xi + xj + M.sqrtWad(2 * M.mulWad(xi, xj));
+                bytes32 pk = pairKey(i, j);
+                pairLiquidity[pk] = l;
+                pairPrice[pk] = M.divWad(l - xi, l - xj);
             }
         }
     }
@@ -109,9 +128,10 @@ contract NDimPool {
         return reserves;
     }
 
-    /// @notice Current price of token `i` denominated in token `j` (`x_j / x_i`, WAD).
+    /// @notice Current price of token `i` denominated in token `j` (WAD): the marginal amount of
+    /// `j` one more unit of `i` buys, `-dx_j/dx_i = (L - x_i) / (L - x_j)`.
     function priceOf(uint8 i, uint8 j) external view returns (uint256) {
-        return M.divWad(reserves[j], reserves[i]);
+        return pairPrice[pairKey(i, j)];
     }
 
     function pairKey(uint8 i, uint8 j) public pure returns (bytes32) {
@@ -208,7 +228,7 @@ contract NDimPool {
         view
         returns (uint256 amountI, uint256 amountJ, bool inRange)
     {
-        uint256 pCurrent = M.divWad(reserves[j], reserves[i]);
+        uint256 pCurrent = pairPrice[pairKey(i, j)];
         uint256 pA = PriceMath.priceAtTick(tickLower);
         uint256 pB = PriceMath.priceAtTick(tickUpper);
 
@@ -217,18 +237,20 @@ contract NDimPool {
         uint256 cosB = PriceMath.cosTheta(pB);
         uint256 sinB = PriceMath.sinTheta(pB);
 
+        // `sin` grows with price and `cos` shrinks, so `amount_i` empties at the upper tick and
+        // `amount_j` at the lower -- the same boundary conditions as v3, with cos/sin swapped
+        // relative to the old origin-centred circle because reserves are now `L - L*sin`/
+        // `L - L*cos` rather than `L*cos`/`L*sin`.
         if (pCurrent <= pA) {
-            amountI = M.mulWad(liquidityDelta, cosA - cosB);
+            amountI = M.mulWad(liquidityDelta, sinB - sinA);
             amountJ = 0;
         } else if (pCurrent >= pB) {
             amountI = 0;
-            amountJ = M.mulWad(liquidityDelta, sinB - sinA);
+            amountJ = M.mulWad(liquidityDelta, cosA - cosB);
             inRange = false;
         } else {
-            uint256 cosCur = PriceMath.cosTheta(pCurrent);
-            uint256 sinCur = PriceMath.sinTheta(pCurrent);
-            amountI = M.mulWad(liquidityDelta, cosCur - cosB);
-            amountJ = M.mulWad(liquidityDelta, sinCur - sinA);
+            amountI = M.mulWad(liquidityDelta, sinB - PriceMath.sinTheta(pCurrent));
+            amountJ = M.mulWad(liquidityDelta, cosA - PriceMath.cosTheta(pCurrent));
             inRange = true;
         }
     }
@@ -252,78 +274,63 @@ contract NDimPool {
 
         uint8 i = tokenIn < tokenOut ? tokenIn : tokenOut;
         uint8 j = tokenIn < tokenOut ? tokenOut : tokenIn;
-        bool sellingI = tokenIn == i; // true => price (x_j/x_i) decreases
+        bool sellingI = tokenIn == i; // true => price p = (L-x_i)/(L-x_j) decreases
 
         tokens[tokenIn].safeTransferFrom(msg.sender, address(this), amountIn);
 
-        uint256 fee = (amountIn * feePips) / 1_000_000;
-        reserves[tokenIn] += fee; // unattributed fee donation, see docs/DESIGN.md section 7
-        uint256 remaining = amountIn - fee;
+        // Fee is withheld from what walks the curve and simply stays in the reserve as an
+        // unattributed donation (docs/DESIGN.md section 7). Unlike the old reserve-derived
+        // pricing, it no longer nudges the price: `pairPrice` only moves by traded amounts.
+        uint256 remaining = amountIn - (amountIn * feePips) / 1_000_000;
 
         bytes32 pk = pairKey(i, j);
-        uint256 xi = reserves[i];
-        uint256 xj = reserves[j];
+        uint256 p = pairPrice[pk];
         uint256 L = pairLiquidity[pk];
 
         for (uint256 step; step < MAX_SWAP_STEPS && remaining > 0; ++step) {
             if (L == 0) revert InsufficientLiquidity();
 
-            uint256 pCurrent = M.divWad(xj, xi);
-            uint256 cosCur = PriceMath.cosTheta(pCurrent);
-            uint256 sinCur = PriceMath.sinTheta(pCurrent);
+            (int24 nextTick, bool found) =
+                sellingI ? _nextInitializedTickBelow(pk, p) : _nextInitializedTickAbove(pk, p);
 
-            (int24 nextTick, bool found) = sellingI
-                ? _nextInitializedTickBelow(pk, pCurrent)
-                : _nextInitializedTickAbove(pk, pCurrent);
+            uint256 pTarget = found
+                ? PriceMath.priceAtTick(nextTick)
+                : PriceMath.priceAtTick(sellingI ? PriceMath.MIN_TICK : PriceMath.MAX_TICK);
 
-            uint256 pTarget = found ? PriceMath.priceAtTick(nextTick) : PriceMath.priceAtTick(sellingI ? PriceMath.MIN_TICK : PriceMath.MAX_TICK);
-            uint256 cosTarget = PriceMath.cosTheta(pTarget);
-            uint256 sinTarget = PriceMath.sinTheta(pTarget);
+            // Both directions are the same step with the roles of sin/cos swapped: `a` is the
+            // component the input consumes (it always shrinks) and `b` the one the output comes
+            // from (it always grows). Selling i walks the price down, so a = sin; selling j walks
+            // it up, so a = cos. Working in deltas means the circle's centre offset cancels.
+            (uint256 aCur, uint256 bCur, uint256 aTarget, uint256 bTarget) = sellingI
+                ? (PriceMath.sinTheta(p), PriceMath.cosTheta(p), PriceMath.sinTheta(pTarget), PriceMath.cosTheta(pTarget))
+                : (PriceMath.cosTheta(p), PriceMath.sinTheta(p), PriceMath.cosTheta(pTarget), PriceMath.sinTheta(pTarget));
 
-            if (sellingI) {
-                uint256 maxIn = cosTarget > cosCur ? M.mulWad(L, cosTarget - cosCur) : 0;
-                if (remaining < maxIn || !found) {
-                    if (!found && remaining >= maxIn) revert InsufficientLiquidity();
-                    uint256 newCos = cosCur + M.divWad(remaining, L);
-                    uint256 newSin = M.sqrtWad(WAD - M.mulWad(newCos, newCos));
-                    uint256 out = M.mulWad(L, sinCur - newSin);
-                    amountOut += out;
-                    xi += remaining;
-                    xj -= out;
-                    remaining = 0;
-                } else {
-                    uint256 out = M.mulWad(L, sinCur - sinTarget);
-                    amountOut += out;
-                    xi += maxIn;
-                    xj -= out;
-                    remaining -= maxIn;
-                    L = uint256(int256(L) - ticks[pk][nextTick].liquidityNet);
-                }
+            uint256 maxIn = aCur > aTarget ? M.mulWad(L, aCur - aTarget) : 0;
+
+            if (remaining < maxIn || !found) {
+                // Stops inside this step: solve for the exact resting point on the arc.
+                if (!found && remaining >= maxIn) revert InsufficientLiquidity();
+                uint256 newA = aCur - M.divWad(remaining, L);
+                uint256 newB = M.sqrtWad(WAD - M.mulWad(newA, newA));
+                amountOut += M.mulWad(L, newB - bCur);
+                p = sellingI ? M.divWad(newA, newB) : M.divWad(newB, newA);
+                remaining = 0;
             } else {
-                uint256 maxIn = sinTarget > sinCur ? M.mulWad(L, sinTarget - sinCur) : 0;
-                if (remaining < maxIn || !found) {
-                    if (!found && remaining >= maxIn) revert InsufficientLiquidity();
-                    uint256 newSin = sinCur + M.divWad(remaining, L);
-                    uint256 newCos = M.sqrtWad(WAD - M.mulWad(newSin, newSin));
-                    uint256 out = M.mulWad(L, cosCur - newCos);
-                    amountOut += out;
-                    xj += remaining;
-                    xi -= out;
-                    remaining = 0;
-                } else {
-                    uint256 out = M.mulWad(L, cosCur - cosTarget);
-                    amountOut += out;
-                    xj += maxIn;
-                    xi -= out;
-                    remaining -= maxIn;
-                    L = uint256(int256(L) + ticks[pk][nextTick].liquidityNet);
-                }
+                // Reaches the tick: bank the step, cross, and continue with the new liquidity.
+                amountOut += M.mulWad(L, bTarget - bCur);
+                remaining -= maxIn;
+                p = pTarget;
+                int128 net = ticks[pk][nextTick].liquidityNet;
+                L = sellingI ? uint256(int256(L) - net) : uint256(int256(L) + net);
             }
         }
         if (remaining > 0) revert InsufficientLiquidity();
 
-        reserves[i] = xi;
-        reserves[j] = xj;
+        // `reserves` is custody, not curve state: the whole input (fee included) stays, and the
+        // output leaves. An underflow here means other pairs have already claimed this token.
+        reserves[tokenIn] += amountIn;
+        reserves[tokenOut] -= amountOut;
+        pairPrice[pk] = p;
         pairLiquidity[pk] = L;
 
         tokens[tokenOut].safeTransfer(recipient, amountOut);

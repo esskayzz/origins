@@ -187,6 +187,10 @@ describe.skipIf(!anvilUp || !POOL)("frontend against local anvil", () => {
       .find((el) => el.hasAttribute("readonly")) as HTMLInputElement;
     const quoted = parseUnits(quoteInput.value, 18);
     expect(quoted).toBeGreaterThan(0n);
+    // Output is strictly below the 10 TKA input: the 0.3% fee plus price impact. The pool's
+    // original origin-centred curve quoted *more* than the input here, which is why this
+    // assertion could not be made before (see docs/DESIGN.md section 2).
+    expect(quoted).toBeLessThan(parseUnits("10", 18));
 
     fireEvent.click(swapButton);
     await screen.findByText("Swap confirmed.", undefined, WAIT);

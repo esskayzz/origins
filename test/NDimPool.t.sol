@@ -35,11 +35,84 @@ contract NDimPoolTest is Test {
     }
 
     function test_InitialPairLiquidityMatchesSeedRadius() public view {
-        // L_ij = sqrt(x_i^2 + x_j^2) for the seeded (equal) reserves, for every pair.
-        uint256 expected = M.sqrtWad(M.mulWad(SEED, SEED) + M.mulWad(SEED, SEED));
+        // Radius of the centred circle through the seeded reserves:
+        // L_ij = x_i + x_j + sqrt(2*x_i*x_j), which for equal reserves is SEED*(2 + sqrt(2)).
+        uint256 expected = 2 * SEED + M.sqrtWad(2 * M.mulWad(SEED, SEED));
         assertApproxEqAbs(pool.pairLiquidity(pool.pairKey(0, 1)), expected, 2);
         assertApproxEqAbs(pool.pairLiquidity(pool.pairKey(0, 2)), expected, 2);
         assertApproxEqAbs(pool.pairLiquidity(pool.pairKey(1, 2)), expected, 2);
+
+        // Equal reserves must sit at the balanced point, price 1.
+        assertApproxEqAbs(pool.priceOf(0, 1), WAD, 2);
+
+        // The seeded reserves really are on the circle: (L-x)^2 + (L-x)^2 == L^2.
+        uint256 l = pool.pairLiquidity(pool.pairKey(0, 1));
+        uint256 u = l - SEED;
+        assertApproxEqRel(2 * M.mulWad(u, u), M.mulWad(l, l), 1e12);
+    }
+
+    /// @notice The defining property of a usable AMM curve, and the one the original
+    /// origin-centred circle `x_i^2 + x_j^2 = L^2` violated: marginal price must *fall* as a
+    /// token is sold, so a trader never gets a better rate by trading more and can never buy
+    /// output below its spot value. On the old curve the rate rose with size and a few hundred
+    /// tokens drained a 1000-token reserve.
+    function test_SwapIsConvexAndNeverBeatsSpot() public {
+        uint256 spot = pool.priceOf(0, 1); // token1 per token0, WAD
+        uint256 prevRate = type(uint256).max;
+        uint256[5] memory sizes = [uint256(1e18), 10e18, 50e18, 200e18, 500e18];
+
+        for (uint256 k; k < sizes.length; ++k) {
+            uint256 snap = vm.snapshotState();
+            uint256 out = pool.swap(address(this), 0, 1, sizes[k]);
+
+            // Never more output than the pre-trade spot price would give.
+            assertLe(out, M.mulWad(sizes[k], spot), "output beat spot price");
+
+            // Average rate must be strictly worse for a larger trade (diminishing returns).
+            uint256 rate = M.divWad(out, sizes[k]);
+            assertLt(rate, prevRate, "larger trade got a better rate");
+            prevRate = rate;
+
+            vm.revertToState(snap);
+        }
+    }
+
+    /// @notice Like stableswap (and unlike v2's asymptotic hyperbola) a centred circle has finite
+    /// depth: the arc from the balanced point down to price zero absorbs at most `L*sin(theta)`
+    /// of token i, here ~2414e18. A swap inside that capacity must clear and leave the counter
+    /// reserve positive; one beyond it must revert rather than hand over the whole reserve.
+    function test_FiniteDepthClearsBelowCapacityAndRevertsAbove() public {
+        uint256 reserve1Before = pool.reserves(1);
+
+        uint256 snap = vm.snapshotState();
+        uint256 out = pool.swap(address(this), 0, 1, 2_000e18);
+        assertGt(out, 0);
+        assertLt(out, reserve1Before, "paid out the entire reserve");
+        assertGt(pool.reserves(1), 0, "reserve drained to zero");
+        vm.revertToState(snap);
+
+        vm.expectRevert(NDimPool.InsufficientLiquidity.selector);
+        pool.swap(address(this), 0, 1, 3_000e18);
+    }
+
+    /// @notice Price must move against the trader on both sides, and a sell must push the price
+    /// of the sold token down (the sign convention `priceOf(i, j)` documents).
+    function test_PriceMovesAgainstTheTrader() public {
+        uint256 p0 = pool.priceOf(0, 1);
+        pool.swap(address(this), 0, 1, 100e18);
+        uint256 p1 = pool.priceOf(0, 1);
+        assertLt(p1, p0, "selling token0 should lower its price");
+
+        pool.swap(address(this), 1, 0, 100e18);
+        assertGt(pool.priceOf(0, 1), p1, "selling token1 should raise token0's price");
+    }
+
+    /// @notice A mint of in-range liquidity must not move the quoted price. This failed under the
+    /// old reserve-derived pricing, where depositing shifted `reserves[j]/reserves[i]`.
+    function test_MintDoesNotMoveThePrice() public {
+        uint256 before = pool.priceOf(0, 1);
+        pool.mint(address(this), 0, 1, -600, 600, 500e18);
+        assertEq(pool.priceOf(0, 1), before);
     }
 
     function test_MintBurnRoundTrip() public {

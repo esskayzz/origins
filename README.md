@@ -2,10 +2,13 @@
 
 A Uniswap v4-inspired reference implementation that extends concentrated
 liquidity pools from 2 tokens to **N tokens** in a single pool contract.
-Every pair of tokens `(i, j)` trades along a circle `x_i² + x_j² = L_ij²` —
-the sum-of-squares analogue of v3/v4's `x·y = L²` hyperbola — using the same
-`1.0001^tick` price convention and single-range concentrated-liquidity
-mechanics LPs already know from v3/v4.
+Every pair of tokens `(i, j)` trades along a circle centred at `(L_ij, L_ij)`,
+`(L_ij − x_i)² + (L_ij − x_j)² = L_ij²` — the sum-of-squares analogue of v3/v4's
+`x·y = L²` hyperbola — using the same `1.0001^tick` price convention and
+single-range concentrated-liquidity mechanics LPs already know from v3/v4. The
+centre placement is what makes the curve convex where trading happens, giving it
+a stableswap shape: nearly flat near the balanced point, steep at the edges, and
+with finite depth (see [docs/DESIGN.md](docs/DESIGN.md) section 2a).
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the full math writeup (invariant,
 tick system, mint/burn formulas, swap algorithm, and explicit scope/
@@ -57,3 +60,48 @@ PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
 (That private key is Anvil's well-known, publicly documented default test
 account #0 — safe only because this chain is local and ephemeral. Use your
 own funded key for a testnet.)
+
+### Deploying to Sepolia
+
+Put a Sepolia RPC in the (gitignored) root `.env` as `SEPOLIA_RPC_URL`;
+`foundry.toml` exposes it as the `sepolia` alias. With a NOWNodes key the URL is
+`https://eth-sepolia.nownodes.io/<key>` (key as a path segment, since
+`forge script` can't send headers). Then sign with a `cast wallet` keystore
+instead of a raw key — leave `PRIVATE_KEY` unset and the script broadcasts as
+`--sender`:
+
+```shell
+forge script script/DeployNDimPool.s.sol:DeployNDimPool \
+  --rpc-url sepolia --account <keystore-name> --sender <its-address> --broadcast
+```
+
+Two Sepolia-specific flags matter. Post-Fusaka Sepolia charges ~1,542 gas per
+byte of deployed code (vs. the 200 forge's local EVM assumes) and caps any one
+transaction at 16,777,216 gas, so forge's simulated estimates are ~6x too low
+and a default `--gas-estimate-multiplier` of 130% would push the pool deploy
+over the cap. `--skip-simulation` makes forge take gas from the node's
+`eth_estimateGas` instead, and `100` disables the multiplier. `foundry.toml`'s
+`optimizer_runs = 1` / no metadata hash exist for the same reason: they shrink
+`NDimPool` by a few hundred bytes. At 9,893 bytes the pool deploy costs
+~16.08M gas, leaving ~0.7M under the cap; check `forge build --sizes` before
+deploying if the contract grows.
+
+The deployer needs a little Sepolia ETH (the whole deploy is ~26M gas, a few
+ten-thousandths of an ETH at typical Sepolia prices). Afterwards set
+`VITE_POOL_ADDRESS_11155111` to the printed `NDimPool` address in
+`frontend/.env.local` (and in the Vercel project, if deployed).
+
+Current Sepolia deployment (deployer `0x37e3C22A7e155e65f32B35c149a2aF23176d107e`):
+
+| Contract | Address |
+| --- | --- |
+| `NDimPool` | `0xD83e212B89b622400aa1a0e360E5cBd2d4920711` |
+| TKA (`TestERC20`) | `0x661D9f45511A1579642c932AB927a01cE25eEace` |
+| TKB (`TestERC20`) | `0xa0Bc31D541dd3f16460fCC1296A6c0813E03a576` |
+| TKC (`TestERC20`) | `0x29dfB41D58EDE6d0fF14063344102375B81F4cC1` |
+
+(An earlier deployment at `0xb55Dc1fa…` carried the origin-centred invariant and
+is superseded — do not use it; see [docs/DESIGN.md](docs/DESIGN.md) section 2a.)
+
+`TestERC20.mint()` is public, so anyone can faucet themselves TKA/TKB/TKC (the
+frontend's "Get 1000 …" links do exactly that).
