@@ -28,7 +28,8 @@ to connect a wallet, then a dark sider + light content dashboard shell with
   `useDisconnect` to dodge a peer-dependency conflict (`@ant-design/web3-wagmi`
   declares `wagmi@^2.x`, we have `wagmi@3`) — that version silently swallowed
   connect failures and lost multi-wallet (EIP-6963) support, which is the
-  adapter's job. Installed with `--legacy-peer-deps`; verified only one
+  adapter's job. `.npmrc` sets `legacy-peer-deps=true` so a plain `npm install`
+  works locally and on Vercel; verified only one
   `wagmi`/`antd`/`react` instance ends up in the tree (`npm ls wagmi antd react`)
   so the shared context actually line up.
 - `wagmiConfig.connectors` is intentionally empty — wagmi's
