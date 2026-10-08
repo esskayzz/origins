@@ -159,6 +159,20 @@ export const NDIM_POOL_ABI = [
       { type: "uint256", name: "amountOut" },
     ],
   },
+  // Custom errors, so viem can decode a revert into its name instead of showing a bare
+  // 4-byte selector ("reverted with the following signature: 0x7939f424"). The first group
+  // is NDimPool's own; the rest come from Solady's SafeTransferLib, which the pool uses to
+  // move tokens -- TransferFromFailed is what an insufficient balance/allowance surfaces as.
+  { type: "error", name: "InvalidTokenIndex", inputs: [] },
+  { type: "error", name: "InvalidTickRange", inputs: [] },
+  { type: "error", name: "InsufficientLiquidity", inputs: [] },
+  { type: "error", name: "ZeroLiquidity", inputs: [] },
+  { type: "error", name: "ZeroReserve", inputs: [] },
+  { type: "error", name: "AlreadyInitialized", inputs: [] },
+  { type: "error", name: "NotInitialized", inputs: [] },
+  { type: "error", name: "TransferFromFailed", inputs: [] },
+  { type: "error", name: "TransferFailed", inputs: [] },
+  { type: "error", name: "ApproveFailed", inputs: [] },
 ] as const;
 
 export const ERC20_ABI = [

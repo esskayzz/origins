@@ -70,6 +70,15 @@ export function LiquidityPairRow({
   const needsApprovalI = previewAmountI !== undefined && (tokenI.allowance ?? 0n) < previewAmountI;
   const needsApprovalJ = previewAmountJ !== undefined && (tokenJ.allowance ?? 0n) < previewAmountJ;
 
+  // `mint` pulls both preview amounts with safeTransferFrom; if the wallet holds less than that
+  // the simulation reverts with Solady's TransferFromFailed, which used to surface as a bare
+  // selector. Say what is actually missing instead, and point at the faucet.
+  const insufficientI =
+    previewAmountI !== undefined && tokenI.balance !== undefined && tokenI.balance < previewAmountI;
+  const insufficientJ =
+    previewAmountJ !== undefined && tokenJ.balance !== undefined && tokenJ.balance < previewAmountJ;
+  const insufficientBalance = insufficientI || insufficientJ;
+
   // Only simulate the real call once approvals are sufficient, both to avoid the deadlock above
   // and so any remaining error here is a genuine (non-approval) problem with the mint. That
   // includes waiting for the preview itself: before it loads both `needsApproval*` are trivially
@@ -81,7 +90,12 @@ export function LiquidityPairRow({
     args: account ? [account, i.index, j.index, tickLower, tickUpper, liquidityDelta] : undefined,
     query: {
       enabled: Boolean(
-        account && liquidityDelta > 0n && preview !== undefined && !needsApprovalI && !needsApprovalJ,
+        account &&
+        liquidityDelta > 0n &&
+        preview !== undefined &&
+        !needsApprovalI &&
+        !needsApprovalJ &&
+        !insufficientBalance,
       ),
     },
   });
@@ -89,7 +103,11 @@ export function LiquidityPairRow({
   const { writeContract, data: mintHash, isPending: isMinting } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: mintHash });
 
-  const canMint = Boolean(simulation) && !needsApprovalI && !needsApprovalJ;
+  const canMint = Boolean(simulation) && !needsApprovalI && !needsApprovalJ && !insufficientBalance;
+
+  const shortfall = (token: PoolToken, need: bigint | undefined, have: bigint | undefined) =>
+    `Insufficient ${token.symbol}: this position needs ${formatUnits(need ?? 0n, token.decimals)} but the ` +
+    `wallet holds ${formatUnits(have ?? 0n, token.decimals)}. Use the faucet or lower the liquidity.`;
 
   return (
     <Card size="small" className="liquidity-pair-row">
@@ -114,7 +132,14 @@ export function LiquidityPairRow({
           <FaucetButton tokenAddress={j.address} symbol={j.symbol} decimals={j.decimals} />
         </Space>
 
-        {simulateError && (
+        {insufficientI && (
+          <Alert type="warning" showIcon message={shortfall(i, previewAmountI, tokenI.balance)} />
+        )}
+        {insufficientJ && (
+          <Alert type="warning" showIcon message={shortfall(j, previewAmountJ, tokenJ.balance)} />
+        )}
+
+        {simulateError && !insufficientBalance && (
           <Alert
             type="error"
             showIcon
@@ -137,7 +162,7 @@ export function LiquidityPairRow({
             <Button
               size="small"
               type="primary"
-              disabled={!canMint}
+              disabled={!canMint || insufficientBalance}
               loading={isMinting || isConfirming}
               onClick={() => simulation && writeContract(simulation.request)}
             >

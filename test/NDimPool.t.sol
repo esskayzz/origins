@@ -107,6 +107,51 @@ contract NDimPoolTest is Test {
         assertGt(pool.priceOf(0, 1), p1, "selling token1 should raise token0's price");
     }
 
+    /// @notice `priceOf` takes the indices in either order. Regression test for: it fed them
+    /// straight to the order-sensitive `pairKey`, so a descending call read an unwritten slot and
+    /// silently returned 0 instead of the reciprocal.
+    function test_PriceOfAcceptsEitherIndexOrder() public {
+        assertEq(pool.priceOf(0, 1), WAD);
+        assertEq(pool.priceOf(1, 0), WAD);
+
+        // Displace the price, then check the two directions stay reciprocal.
+        pool.swap(address(this), 0, 1, 100e18);
+        uint256 forward = pool.priceOf(0, 1);
+        uint256 reverse = pool.priceOf(1, 0);
+        assertLt(forward, WAD);
+        assertGt(reverse, WAD);
+        assertApproxEqRel(M.mulWad(forward, reverse), WAD, 1e12);
+    }
+
+    function test_PriceOfRejectsBadIndices() public {
+        vm.expectRevert(NDimPool.InvalidTokenIndex.selector);
+        pool.priceOf(1, 1);
+        vm.expectRevert(NDimPool.InvalidTokenIndex.selector);
+        pool.priceOf(0, 9);
+    }
+
+    /// @notice Convexity must hold for the *reverse* direction too, starting from a price another
+    /// trade has already displaced. A sweep flagged "10 in returns 10.011 out" here, which is
+    /// correct (the first trade made that token cheaper) but only safe if the fill is still below
+    /// spot -- that is the property worth pinning down.
+    function test_ReverseSwapFromDisplacedPriceNeverBeatsSpot() public {
+        pool.swap(address(this), 0, 1, 100e18); // displace: token0 now cheaper
+        uint256 spot = pool.priceOf(1, 0); // token0 per token1, > 1 now
+        assertGt(spot, WAD);
+
+        uint256 prevRate = type(uint256).max;
+        uint256[3] memory sizes = [uint256(1e18), 10e18, 100e18];
+        for (uint256 k; k < sizes.length; ++k) {
+            uint256 snap = vm.snapshotState();
+            uint256 out = pool.swap(address(this), 1, 0, sizes[k]);
+            assertLe(out, M.mulWad(sizes[k], spot), "reverse fill beat spot");
+            uint256 rate = M.divWad(out, sizes[k]);
+            assertLt(rate, prevRate, "larger reverse trade got a better rate");
+            prevRate = rate;
+            vm.revertToState(snap);
+        }
+    }
+
     /// @notice A mint of in-range liquidity must not move the quoted price. This failed under the
     /// old reserve-derived pricing, where depositing shifted `reserves[j]/reserves[i]`.
     function test_MintDoesNotMoveThePrice() public {

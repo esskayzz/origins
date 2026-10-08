@@ -130,8 +130,14 @@ contract NDimPool {
 
     /// @notice Current price of token `i` denominated in token `j` (WAD): the marginal amount of
     /// `j` one more unit of `i` buys, `-dx_j/dx_i = (L - x_i) / (L - x_j)`.
+    /// @dev Accepts the indices in either order. `pairPrice` is only stored under the ascending
+    /// key, so a descending call returns the reciprocal; previously it read an unwritten slot and
+    /// silently answered 0.
     function priceOf(uint8 i, uint8 j) external view returns (uint256) {
-        return pairPrice[pairKey(i, j)];
+        if (i == j || i >= n || j >= n) revert InvalidTokenIndex();
+        if (i < j) return pairPrice[pairKey(i, j)];
+        uint256 p = pairPrice[pairKey(j, i)];
+        return p == 0 ? 0 : M.divWad(WAD, p);
     }
 
     function pairKey(uint8 i, uint8 j) public pure returns (bytes32) {
